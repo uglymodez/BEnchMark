@@ -20,7 +20,7 @@ trap 'rm -rf -- "$TEMP_DIR"' EXIT
 APP_PATH="$BUILD_DIR/Memory Benchmark.app"
 mkdir -p "$BUILD_DIR"
 CC=(xcrun --sdk macosx clang -arch "$BUILD_ARCH" -isysroot "$SDK_DIR" -mmacosx-version-min=12.0 -O3 -Wall -Wextra)
-echo "Собираю Memory Benchmark для $BUILD_ARCH…"
+echo "Собираю Memory Benchmark для ${BUILD_ARCH}..."
 "${CC[@]}" -std=c11 -c Sources/benchmark.c -o "$TEMP_DIR/benchmark.o"
 "${CC[@]}" -fobjc-arc -c Sources/main.m -o "$TEMP_DIR/main.o"
 mkdir -p "$TEMP_DIR/Memory Benchmark.app/Contents/MacOS" "$TEMP_DIR/Memory Benchmark.app/Contents/Resources"
