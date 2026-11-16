@@ -25,7 +25,7 @@ int main(void) {
     assert(mb_measure(ctx,MB_READ,4096,NAN,3,&r)==MB_ERROR);
     assert(mb_measure(ctx,MB_READ,4096,0.002,0,&r)==MB_ERROR);
     assert(mb_measure(ctx,MB_EXECUTE,128*1024*1024,0.002,3,&r)==MB_UNAVAILABLE);
-    for (int op=MB_READ; op<=MB_EXECUTE; ++op) {
+    for (int op=MB_READ; op<=MB_LATENCY; ++op) {
         for (size_t n=4096; n<=1024*1024; n*=16) {
             mb_status status=mb_measure(ctx,(mb_operation)op,n,0.002,3,&r);
             if (op==MB_EXECUTE && status==MB_UNAVAILABLE) {
@@ -33,18 +33,42 @@ int main(void) {
             }
             assert(status==MB_OK);
             assert(r.bytes==n && r.samples==3 && r.passes>=3 && r.seconds>=0.006);
-            assert(isfinite(r.gb_per_second) && r.gb_per_second>0);
-            assert(r.minimum_gb_per_second<=r.gb_per_second && r.maximum_gb_per_second>=r.gb_per_second);
+            assert(isfinite(mb_result_value(&r)) && mb_result_value(&r)>0);
+            assert(mb_result_minimum(&r)<=mb_result_value(&r) && mb_result_maximum(&r)>=mb_result_value(&r));
         }
     }
     /* Reuse the JIT mapping for a smaller code footprint as the UI does on reruns. */
     mb_status jit=mb_measure(ctx,MB_EXECUTE,4096,0.002,2,&r);
     assert(jit==MB_OK || jit==MB_UNAVAILABLE);
+    const double values[]={5,1,4,2,3}; mb_statistics stats;
+    assert(mb_summarize(values,5,&stats));
+    assert(stats.median==3 && stats.minimum==1 && stats.maximum==5 && stats.mean==3);
+    assert(fabs(stats.standard_deviation-sqrt(2))<1e-12);
+    assert(fabs(stats.cv_percent-sqrt(2)/3*100)<1e-10);
+    assert(mb_summarize(values,4,&stats) && stats.median==3);
+    assert(mb_summarize(values,1,&stats) && stats.cv_percent==0);
+    assert(!mb_summarize(values,0,&stats));
+    assert(!mb_summarize(values,10,&stats));
+    assert(!mb_summarize((double[]){1,NAN},2,&stats));
+    assert(!mb_summarize((double[]){1,INFINITY},2,&stats));
+    assert(!mb_summarize((double[]){1,0},2,&stats));
+    for (unsigned samples=1;samples<=MB_MAX_SAMPLES;++samples) {
+        assert(mb_measure(ctx,MB_LATENCY,4096+256,0.001,samples,&r)==MB_OK);
+        assert(r.gb_per_second==0 && r.nanoseconds_per_load>0);
+        assert(mb_summarize(r.sample_values,r.samples,&stats));
+        assert(stats.median==mb_result_value(&r) && stats.cv_percent==r.cv_percent);
+        assert(r.passes%1024==0);
+    }
+    volatile sig_atomic_t flag=1;
+    mb_set_cancel_flag(ctx,&flag);
+    assert(mb_measure(ctx,MB_LATENCY,4096,0.001,1,&r)==MB_CANCELLED);
+    flag=0; mb_set_cancel_flag(ctx,NULL);
     pthread_t worker; assert(pthread_create(&worker,NULL,cancel_later,ctx)==0);
     assert(mb_measure(ctx,MB_READ,4096,0.2,9,&r)==MB_CANCELLED);
     pthread_join(worker,NULL);
     assert(mb_measure(ctx,MB_WRITE,4096,0.002,3,&r)==MB_CANCELLED);
     mb_destroy(ctx);
-    puts("PASS: sweep, validation, read/write/execute, statistics, mapping reuse, cancellation");
+    puts("PASS: sweep, four workloads, raw samples, statistics, mapping reuse, cancellation");
     return 0;
 }
+

@@ -19,12 +19,13 @@ TEMP_DIR="$(mktemp -d "$ROOT_DIR/.build.XXXXXX")"
 trap 'rm -rf -- "$TEMP_DIR"' EXIT
 APP_PATH="$BUILD_DIR/Memory Benchmark.app"
 mkdir -p "$BUILD_DIR"
-CC=(xcrun --sdk macosx clang -arch "$BUILD_ARCH" -isysroot "$SDK_DIR" -mmacosx-version-min=12.0 -O3 -Wall -Wextra)
+CC=(xcrun --sdk macosx clang -arch "$BUILD_ARCH" -isysroot "$SDK_DIR" -mmacosx-version-min=12.0 -O3 -Wall -Wextra -Werror)
 echo "Собираю Memory Benchmark для ${BUILD_ARCH}..."
 "${CC[@]}" -std=c11 -c Sources/benchmark.c -o "$TEMP_DIR/benchmark.o"
 "${CC[@]}" -fobjc-arc -c Sources/main.m -o "$TEMP_DIR/main.o"
+"${CC[@]}" -fobjc-arc -c Sources/report.m -o "$TEMP_DIR/report.o"
 mkdir -p "$TEMP_DIR/Memory Benchmark.app/Contents/MacOS" "$TEMP_DIR/Memory Benchmark.app/Contents/Resources"
-"${CC[@]}" "$TEMP_DIR/main.o" "$TEMP_DIR/benchmark.o" -framework Cocoa -o "$TEMP_DIR/Memory Benchmark.app/Contents/MacOS/MemoryBenchmark"
+"${CC[@]}" "$TEMP_DIR/main.o" "$TEMP_DIR/report.o" "$TEMP_DIR/benchmark.o" -framework Cocoa -o "$TEMP_DIR/Memory Benchmark.app/Contents/MacOS/MemoryBenchmark"
 cp Resources/Info.plist "$TEMP_DIR/Memory Benchmark.app/Contents/Info.plist"
 cp Resources/AppIcon.icns "$TEMP_DIR/Memory Benchmark.app/Contents/Resources/AppIcon.icns"
 "${CC[@]}" -std=c11 Sources/cli.c "$TEMP_DIR/benchmark.o" -o "$TEMP_DIR/memory-bench"
@@ -47,4 +48,5 @@ mv "$TEMP_DIR/Memory Benchmark.app" "$APP_PATH"
 cp "$TEMP_DIR/memory-bench" "$BUILD_DIR/memory-bench"
 echo "Готово: $APP_PATH"
 echo 'Теперь приложение можно перенести в «Программы».'
-open "$APP_PATH"
+if [[ "${MB_NO_OPEN:-0}" != 1 ]]; then open "$APP_PATH"; fi
+

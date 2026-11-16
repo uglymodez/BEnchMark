@@ -27,6 +27,7 @@
 #define NOINLINE __attribute__((noinline))
 struct mb_context {
     atomic_bool cancelled;
+    const volatile sig_atomic_t *cancel_flag;
     unsigned char *data;
     size_t data_size;
     void *code;
@@ -62,7 +63,11 @@ void mb_cancel(mb_context *ctx) {
     if (ctx) atomic_store_explicit(&ctx->cancelled, 1, memory_order_relaxed);
 }
 int mb_is_cancelled(const mb_context *ctx) {
-    return ctx && atomic_load_explicit(&ctx->cancelled, memory_order_relaxed);
+    return ctx && (atomic_load_explicit(&ctx->cancelled, memory_order_relaxed) ||
+                   (ctx->cancel_flag && *ctx->cancel_flag));
+}
+void mb_set_cancel_flag(mb_context *ctx, const volatile sig_atomic_t *flag) {
+    if (ctx) ctx->cancel_flag = flag;
 }
 const char *mb_error(const mb_context *ctx) { return ctx ? ctx->error : "No context"; }
 const char *mb_architecture(void) {
@@ -72,7 +77,53 @@ const char *mb_architecture(void) {
     return "x86_64 / SSE2 128-bit";
 #endif
 }
-const char *mb_method_version(void) { return "MBM-1.0"; }
+const char *mb_method_version(void) { return "MBM-2.0"; }
+
+const char *mb_operation_name(mb_operation op) {
+    switch (op) {
+        case MB_READ: return "read";
+        case MB_WRITE: return "write";
+        case MB_EXECUTE: return "execute_proxy";
+        case MB_LATENCY: return "latency";
+    }
+    return "unknown";
+}
+const char *mb_operation_unit(mb_operation op) { return op == MB_LATENCY ? "ns/load" : "GB/s"; }
+double mb_result_value(const mb_result *r) {
+    return r->operation == MB_LATENCY ? r->nanoseconds_per_load : r->gb_per_second;
+}
+double mb_result_minimum(const mb_result *r) {
+    return r->operation == MB_LATENCY ? r->minimum_nanoseconds_per_load : r->minimum_gb_per_second;
+}
+double mb_result_maximum(const mb_result *r) {
+    return r->operation == MB_LATENCY ? r->maximum_nanoseconds_per_load : r->maximum_gb_per_second;
+}
+int mb_summarize(const double *values, unsigned count, mb_statistics *out) {
+    if (!out) return 0;
+    memset(out, 0, sizeof(*out));
+    if (!values || !count || count > MB_MAX_SAMPLES) return 0;
+    double sorted[MB_MAX_SAMPLES], mean = 0, m2 = 0;
+    for (unsigned i = 0; i < count; ++i) {
+        if (!isfinite(values[i]) || values[i] <= 0) return 0;
+        sorted[i] = values[i];
+        double delta = values[i] - mean;
+        mean += delta / (i + 1);
+        m2 += delta * (values[i] - mean);
+    }
+    for (unsigned i = 1; i < count; ++i) {
+        double v = sorted[i]; unsigned j = i;
+        while (j && sorted[j - 1] > v) { sorted[j] = sorted[j - 1]; --j; }
+        sorted[j] = v;
+    }
+    out->median = count % 2 ? sorted[count/2] : (sorted[count/2-1] + sorted[count/2])/2;
+    out->minimum = sorted[0]; out->maximum = sorted[count-1]; out->mean = mean;
+    out->standard_deviation = sqrt(fmax(0, m2 / count));
+    out->cv_percent = out->standard_deviation / mean * 100;
+    if (!isfinite(out->median) || !isfinite(out->cv_percent)) {
+        memset(out, 0, sizeof(*out)); return 0;
+    }
+    return 1;
+}
 
 /* Explicit 128-bit loads/stores: no optimizer may remove/rewrite the memory
    traffic. Four independent accumulators hide XOR dependency latency. Compiler
@@ -143,6 +194,35 @@ static mb_status prepare_data(mb_context *ctx, size_t n) {
     return MB_OK;
 }
 
+/* Insert each new node after a uniformly selected existing node. This creates
+   one deterministic shuffled cycle covering every 128-byte slot, with no second
+   allocation. 128 is the workload spacing, not a detected cache-line size. */
+static mb_status prepare_chain(mb_context *ctx, size_t n) {
+    mb_status status = prepare_data(ctx, n);
+    if (status != MB_OK) return status;
+    uint64_t state = UINT64_C(0xd1b54a32d192ed03);
+    *(uintptr_t *)ctx->data = (uintptr_t)ctx->data;
+    size_t nodes = n / MB_LATENCY_STRIDE;
+    for (size_t i = 1; i < nodes; ++i) {
+        uint64_t random, bound = (uint64_t)i, threshold = (uint64_t)(-bound) % bound;
+        do {
+            state ^= state >> 12; state ^= state << 25; state ^= state >> 27;
+            random = state * UINT64_C(2685821657736338717);
+        } while (random < threshold);
+        uintptr_t *previous = (uintptr_t *)(ctx->data + (random % bound) * MB_LATENCY_STRIDE);
+        uintptr_t *node = (uintptr_t *)(ctx->data + i * MB_LATENCY_STRIDE);
+        *node = *previous; *previous = (uintptr_t)node;
+        if ((i & 4095) == 0 && mb_is_cancelled(ctx)) return MB_CANCELLED;
+    }
+    return MB_OK;
+}
+static NOINLINE uintptr_t chase(uintptr_t cursor, size_t loads) {
+    /* Each address depends on the preceding load. Volatile preserves every
+       access; no independent streams can hide memory latency. */
+    for (size_t i = 0; i < loads; ++i) cursor = *(const volatile uintptr_t *)cursor;
+    return cursor;
+}
+
 static mb_status prepare_code(mb_context *ctx, size_t n) {
     if (!ctx->code) {
         int flags = MAP_PRIVATE | MAP_ANONYMOUS;
@@ -200,19 +280,28 @@ mb_status mb_measure(mb_context *ctx, mb_operation op, size_t n,
                      double duration, unsigned count, mb_result *out) {
     if (!ctx || !out) return MB_ERROR;
     memset(out, 0, sizeof(*out)); ctx->error[0] = '\0';
-    if (op < MB_READ || op > MB_EXECUTE || n < MB_MIN || n > MB_MAX || n % 256 ||
-        !isfinite(duration) || duration < 0.001 || duration > 1.0 || count < 1 || count > 9) {
+    if (op < MB_READ || op > MB_LATENCY || n < MB_MIN || n > MB_MAX || n % 256 ||
+        !isfinite(duration) || duration < 0.001 || duration > 1.0 || count < 1 || count > MB_MAX_SAMPLES) {
         problem(ctx, "Invalid benchmark settings."); return MB_ERROR;
     }
     if (mb_is_cancelled(ctx)) return MB_CANCELLED;
     if (op == MB_EXECUTE && n > MB_CODE_MAX) {
         problem(ctx, "Instruction test is limited to 64 MiB."); return MB_UNAVAILABLE;
     }
-    mb_status status = op == MB_EXECUTE ? prepare_code(ctx,n) : prepare_data(ctx,n);
+    mb_status status = op == MB_EXECUTE ? prepare_code(ctx,n) :
+                       op == MB_LATENCY ? prepare_chain(ctx,n) : prepare_data(ctx,n);
     if (status != MB_OK) return status;
-    one_pass(ctx,op,n); /* Untimed warmup. */
+    uintptr_t cursor = (uintptr_t)ctx->data;
+    if (op == MB_LATENCY) {
+        size_t remaining = n / MB_LATENCY_STRIDE;
+        while (remaining) {
+            size_t loads = remaining < 1024 ? remaining : 1024;
+            cursor = chase(cursor, loads); remaining -= loads;
+            if (mb_is_cancelled(ctx)) return MB_CANCELLED;
+        }
+    } else one_pass(ctx,op,n); /* Untimed warmup. */
     if (op == MB_WRITE) finish_stores();
-    double rates[9]; double elapsed_total = 0; uint64_t total = 0;
+    double rates[MB_MAX_SAMPLES]; double elapsed_total = 0; uint64_t total = 0;
     /* Batches cap timer overhead for tiny buffers. At most 1 MiB per check;
        large working sets check cancellation between individual passes. */
     size_t batch = (1024*1024)/n;
@@ -221,8 +310,8 @@ mb_status mb_measure(mb_context *ctx, mb_operation op, size_t n,
         if (mb_is_cancelled(ctx)) return MB_CANCELLED;
         uint64_t passes = 0; double start = now(), elapsed;
         do {
-            for (size_t k=0; k<batch; ++k) one_pass(ctx,op,n);
-            passes += batch;
+            if (op == MB_LATENCY) { cursor = chase(cursor, 1024); passes += 1024; }
+            else { for (size_t k=0; k<batch; ++k) one_pass(ctx,op,n); passes += batch; }
             if (op == MB_WRITE) finish_stores();
             elapsed = now()-start;
             if (mb_is_cancelled(ctx)) return MB_CANCELLED;
@@ -230,18 +319,27 @@ mb_status mb_measure(mb_context *ctx, mb_operation op, size_t n,
         if (elapsed <= 0 || !isfinite(elapsed)) {
             problem(ctx, "Invalid clock measurement."); return MB_ERROR;
         }
-        rates[s] = ((double)n * (double)passes) / elapsed / 1e9;
+        rates[s] = op == MB_LATENCY ? elapsed * 1e9 / (double)passes :
+                   ((double)n * (double)passes) / elapsed / 1e9;
         elapsed_total += elapsed; total += passes;
     }
-    for (unsigned i=1; i<count; ++i) {
-        double value = rates[i]; unsigned j=i;
-        while (j>0 && rates[j-1]>value) { rates[j]=rates[j-1]; --j; }
-        rates[j]=value;
+    ctx->sink ^= cursor;
+    mb_statistics stats;
+    if (!mb_summarize(rates, count, &stats)) {
+        problem(ctx, "Invalid sample statistics."); return MB_ERROR;
     }
     out->bytes=n; out->operation=op; out->seconds=elapsed_total;
-    out->passes=total; out->samples=count;
-    out->gb_per_second = count%2 ? rates[count/2] : (rates[count/2-1]+rates[count/2])/2;
-    out->minimum_gb_per_second=rates[0]; out->maximum_gb_per_second=rates[count-1];
+    out->passes=total; out->samples=count; out->cv_percent=stats.cv_percent;
+    memcpy(out->sample_values, rates, count * sizeof(double));
+    if (op == MB_LATENCY) {
+        out->nanoseconds_per_load=stats.median;
+        out->minimum_nanoseconds_per_load=stats.minimum;
+        out->maximum_nanoseconds_per_load=stats.maximum;
+    } else {
+        out->gb_per_second=stats.median;
+        out->minimum_gb_per_second=stats.minimum;
+        out->maximum_gb_per_second=stats.maximum;
+    }
     return MB_OK;
 }
 
@@ -257,3 +355,4 @@ size_t mb_sizes(size_t max, size_t *sizes, size_t capacity) {
     if (capacity<count) return 0;
     memcpy(sizes,values,count*sizeof(size_t)); return count;
 }
+

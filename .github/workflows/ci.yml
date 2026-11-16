@@ -1,0 +1,45 @@
+name: Memory Lab validation
+on:
+  pull_request:
+  workflow_dispatch:
+permissions:
+  contents: read
+concurrency:
+  group: memory-lab-${{ github.ref }}
+  cancel-in-progress: true
+jobs:
+  portable-core:
+    runs-on: ubuntu-latest
+    timeout-minutes: 10
+    steps:
+      - uses: actions/checkout@v4
+      - name: Core, chain invariants and CLI contracts
+        run: bash test.sh
+      - name: Address and undefined behavior sanitizers
+        run: SANITIZE=1 bash test.sh
+  macos:
+    strategy:
+      fail-fast: false
+      matrix:
+        runner: [macos-15, macos-15-intel]
+    runs-on: ${{ matrix.runner }}
+    timeout-minutes: 15
+    steps:
+      - uses: actions/checkout@v4
+      - name: Test native core and report persistence
+        run: bash test.sh
+      - name: Build and verify signed app
+        run: MB_NO_OPEN=1 bash build.sh
+      - name: Launch AppKit and capture a real latency sweep
+        run: |
+          MB_SMOKE_SCREENSHOT="$PWD/build/memory-lab.png" "build/Memory Benchmark.app/Contents/MacOS/MemoryBenchmark" --smoke-test
+      - name: Package native app
+        run: ditto -c -k --sequesterRsrc --keepParent "build/Memory Benchmark.app" "build/MemoryLab-${{ runner.arch }}.zip"
+      - uses: actions/upload-artifact@v4
+        with:
+          name: MemoryLab-${{ matrix.runner }}
+          path: |
+            build/MemoryLab-*.zip
+            build/memory-bench
+            build/memory-lab.png
+          if-no-files-found: error
