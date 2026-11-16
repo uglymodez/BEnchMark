@@ -10,10 +10,10 @@ Apple Silicon, в том числе Apple M5. Минимальная целев�
 
 ## Скачать
 
-[Готовое приложение для Apple Silicon с исходниками](downloads/MemoryBenchmark-Mac.zip).
+[Готовое приложение для Apple Silicon с исходниками](https://github.com/uglymodez/BEnchMark/blob/main/downloads/MemoryBenchmark-Mac.zip).
 На странице ZIP в GitHub нажми **Download raw file**. В приватном репозитории
 для скачивания нужно войти в свой аккаунт GitHub.
-[SHA-256 архива](downloads/SHA256SUMS.txt).
+[SHA-256 архива](https://github.com/uglymodez/BEnchMark/blob/main/downloads/SHA256SUMS.txt).
 
 ## Совместимость
 
