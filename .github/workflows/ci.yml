@@ -30,7 +30,7 @@ jobs:
         run: bash test.sh
       - name: Build and verify signed app
         run: MB_NO_OPEN=1 bash build.sh
-      - name: Launch AppKit and capture a real latency sweep
+      - name: Launch AppKit, restore baseline and compare two real sweeps
         run: |
           MB_SMOKE_SCREENSHOT="$PWD/build/memory-lab.png" "build/Memory Benchmark.app/Contents/MacOS/MemoryBenchmark" --smoke-test
       - name: Package native app
@@ -41,5 +41,5 @@ jobs:
           path: |
             build/MemoryLab-*.zip
             build/memory-bench
-            build/memory-lab.png
+            build/memory-lab*
           if-no-files-found: error

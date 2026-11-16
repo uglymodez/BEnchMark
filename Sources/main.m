@@ -197,6 +197,7 @@ static NSTextField *Label(NSString *text, CGFloat size, NSFontWeight weight, NSC
 @property BOOL showingAbout;
 @end
 @implementation MBContent
+- (void)drawRect:(NSRect)dirty { [NSColor.windowBackgroundColor setFill]; NSRectFill(dirty); }
 - (BOOL)isFlipped { return YES; }
 - (void)layout {
     [super layout]; CGFloat w=self.bounds.size.width, h=self.bounds.size.height, gap=24;
@@ -214,7 +215,7 @@ static NSTextField *Label(NSString *text, CGFloat size, NSFontWeight weight, NSC
     CGFloat y=184+chartHeight+14;
     for (NSUInteger i=0;i<self.stats.count;++i) self.stats[i].frame=NSMakeRect(gap+i*(w-2*gap)/3,y,(w-2*gap)/3-10,42);
     self.tableScroll.frame=NSMakeRect(gap,y+52,w-2*gap,106);
-    self.noteLabel.frame=NSMakeRect(gap,h-105,w-2*gap,40);
+    self.noteLabel.frame=NSMakeRect(gap,h-110,w-2*gap,32);
     self.startButton.frame=NSMakeRect(w-178,h-47,154,30);
     self.baselineButton.frame=NSMakeRect(gap,h-47,192,30);
     self.exportButton.frame=NSMakeRect(gap+204,h-47,120,30);
@@ -237,6 +238,7 @@ static NSTextField *Label(NSString *text, CGFloat size, NSFontWeight weight, NSC
 @property NSMutableDictionary<NSNumber *,NSDictionary *> *metadataByMode;
 @property mb_context *context;
 @property BOOL running, smokeTest;
+@property NSUInteger smokePass;
 @property NSInteger selectedMode;
 @property id activity;
 @property NSMutableDictionary<NSNumber *, NSDictionary *> *baselines;
@@ -246,6 +248,7 @@ static NSTextField *Label(NSString *text, CGFloat size, NSFontWeight weight, NSC
 @implementation MBApp
 - (void)applicationDidFinishLaunching:(NSNotification *)note {
     (void)note;
+    self.smokeTest=[NSProcessInfo.processInfo.arguments containsObject:@"--smoke-test"];
     self.points=[NSMutableArray array]; self.resultsByMode=[NSMutableDictionary dictionary]; self.metadataByMode=[NSMutableDictionary dictionary];
     self.window=[[NSWindow alloc] initWithContentRect:NSMakeRect(0,0,1080,800) styleMask:NSWindowStyleMaskTitled|NSWindowStyleMaskClosable|NSWindowStyleMaskMiniaturizable|NSWindowStyleMaskResizable backing:NSBackingStoreBuffered defer:NO];
     self.window.title=@"Memory Benchmark — Mac";
@@ -289,7 +292,7 @@ static NSTextField *Label(NSString *text, CGFloat size, NSFontWeight weight, NSC
     v.tableScroll=[[NSScrollView alloc] initWithFrame:NSZeroRect]; v.tableScroll.documentView=self.table;
     v.tableScroll.hasVerticalScroller=YES; v.tableScroll.borderType=NSBezelBorder;
     v.noteLabel=Label(@"* Выполнение: объём NOP-кода / время; это не прямая скорость I-cache. Один поток, медиана 3 замеров. GB/s = 10⁹ байт/с.",11,NSFontWeightRegular,muted);
-    v.noteLabel.maximumNumberOfLines=3; v.noteLabel.lineBreakMode=NSLineBreakByWordWrapping;
+    v.noteLabel.maximumNumberOfLines=2; v.noteLabel.lineBreakMode=NSLineBreakByWordWrapping;
     v.statusLabel=Label(@"Готов к тесту · закрой тяжёлые приложения",12,NSFontWeightRegular,muted);
     v.progress=[[NSProgressIndicator alloc] initWithFrame:NSZeroRect]; v.progress.indeterminate=NO; v.progress.minValue=0; v.progress.maxValue=1;
     v.startButton=[NSButton buttonWithTitle:@"Начать тест" target:self action:@selector(startOrStop:)]; v.startButton.bezelStyle=NSBezelStyleRounded; v.startButton.keyEquivalent=@"\r";
@@ -309,7 +312,6 @@ static NSTextField *Label(NSString *text, CGFloat size, NSFontWeight weight, NSC
     self.conditionTimer=[NSTimer scheduledTimerWithTimeInterval:1 target:self selector:@selector(updateConditions:) userInfo:nil repeats:YES];
     [self updateConditions:nil]; [self refreshResults];
     [self createMenu]; [v setNeedsLayout:YES]; [self.window center]; [self.window makeKeyAndOrderFront:nil]; [NSApp activateIgnoringOtherApps:YES];
-    self.smokeTest=[NSProcessInfo.processInfo.arguments containsObject:@"--smoke-test"];
     if (self.smokeTest) {
         self.content.tabs.selectedSegment=3; [self changeTab:nil];
         [self.content.maximumPopup selectItemAtIndex:0]; [self.content.profilePopup selectItemAtIndex:0];
@@ -352,6 +354,10 @@ static NSTextField *Label(NSString *text, CGFloat size, NSFontWeight weight, NSC
     [self.content setNeedsLayout:YES];
 }
 - (NSURL *)baselineURL:(NSInteger)mode {
+    if (self.smokeTest) {
+        NSURL *folder=[NSURL fileURLWithPath:[NSTemporaryDirectory() stringByAppendingPathComponent:[NSString stringWithFormat:@"MemoryLab-smoke-%d",NSProcessInfo.processInfo.processIdentifier]] isDirectory:YES];
+        return [folder URLByAppendingPathComponent:[NSString stringWithFormat:@"baseline-%ld.json",(long)mode]];
+    }
     NSURL *support=[NSFileManager.defaultManager URLsForDirectory:NSApplicationSupportDirectory inDomains:NSUserDomainMask].firstObject;
     return [[support URLByAppendingPathComponent:@"MemoryBenchmark" isDirectory:YES] URLByAppendingPathComponent:[NSString stringWithFormat:@"baseline-%ld.json",(long)mode]];
 }
@@ -509,15 +515,33 @@ static NSTextField *Label(NSString *text, CGFloat size, NSFontWeight weight, NSC
         }
     });
 }
+- (void)writeSmokeScreenshot:(NSString *)path {
+    [self.content layoutSubtreeIfNeeded]; [self.content display];
+    NSBitmapImageRep *bitmap=[self.content bitmapImageRepForCachingDisplayInRect:self.content.bounds];
+    [self.content cacheDisplayInRect:self.content.bounds toBitmapImageRep:bitmap];
+    NSData *png=[bitmap representationUsingType:NSBitmapImageFileTypePNG properties:@{}];
+    if (![png writeToFile:path atomically:YES]) exit(1);
+}
 - (void)finishSmokeTest {
+    if (self.smokePass==0) {
+        [self saveBaseline:nil];
+        if (!self.baselines[@(self.selectedMode)]) exit(1);
+        [self.baselines removeAllObjects]; [self loadBaselines];
+        if ([self comparableBaseline].count!=self.points.count) exit(1);
+        self.smokePass=1; [self startOrStop:nil]; return;
+    }
+    if (self.content.chart.baseline.count!=self.points.count) exit(1);
     NSString *path=NSProcessInfo.processInfo.environment[@"MB_SMOKE_SCREENSHOT"];
     if (path.length) {
-        [self.content layoutSubtreeIfNeeded]; [self.content display];
-        NSBitmapImageRep *bitmap=[self.content bitmapImageRepForCachingDisplayInRect:self.content.bounds];
-        [self.content cacheDisplayInRect:self.content.bounds toBitmapImageRep:bitmap];
-        NSData *png=[bitmap representationUsingType:NSBitmapImageFileTypePNG properties:@{}];
-        if (![png writeToFile:path atomically:YES]) exit(1);
+        [self writeSmokeScreenshot:path];
+        self.window.appearance=[NSAppearance appearanceNamed:NSAppearanceNameDarkAqua];
+        [self writeSmokeScreenshot:[[path stringByDeletingPathExtension] stringByAppendingString:@"-dark.png"]];
+        NSDictionary *report=[self currentReport];
+        NSData *json=[NSJSONSerialization dataWithJSONObject:report options:NSJSONWritingPrettyPrinted|NSJSONWritingSortedKeys error:nil];
+        if (![json writeToFile:[[path stringByDeletingPathExtension] stringByAppendingString:@".json"] atomically:YES]) exit(1);
+        if (![MBCSV(report) writeToFile:[[path stringByDeletingPathExtension] stringByAppendingString:@".csv"] atomically:YES encoding:NSUTF8StringEncoding error:nil]) exit(1);
     }
+    [NSFileManager.defaultManager removeItemAtURL:[self baselineURL:self.selectedMode].URLByDeletingLastPathComponent error:nil];
     [NSApp terminate:nil];
 }
 - (void)showError:(NSString *)message {
