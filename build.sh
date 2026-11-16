@@ -40,8 +40,8 @@ done
 codesign --force --sign - --options runtime --entitlements Resources/Entitlements.plist "$TEMP_DIR/Memory Benchmark.app"
 codesign --verify --strict --verbose=2 "$TEMP_DIR/Memory Benchmark.app"
 if [[ "$BUILD_ARCH" == universal ]]; then
-    lipo -verify_arch arm64 x86_64 "$TEMP_DIR/Memory Benchmark.app/Contents/MacOS/MemoryBenchmark"
-    lipo -verify_arch arm64 x86_64 "$TEMP_DIR/memory-bench"
+    lipo "$TEMP_DIR/Memory Benchmark.app/Contents/MacOS/MemoryBenchmark" -verify_arch arm64 x86_64
+    lipo "$TEMP_DIR/memory-bench" -verify_arch arm64 x86_64
 fi
 if [[ "$BUILD_ARCH" == "$(uname -m)" || "$BUILD_ARCH" == universal ]]; then
     echo 'Проверяю измерительное ядро на этом Mac…'
