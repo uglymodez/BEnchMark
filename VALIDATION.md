@@ -28,7 +28,7 @@ AppKit с `-Werror`, проверку ad-hoc подписи и запуск GUI 
 повторный UI-прогон с восстановлением эталона, светлый/тёмный снимки и экспорт.
 Эти дополнительные проверки должны пройти у финального коммита PR.
 
-Workflow `.github/workflows/ci.yml` настроен для Apple Silicon (`macos-15`)
+Workflow `.github/workflows/ci.yml` настроен для Apple Silicon (`macos-26`)
 и Intel (`macos-15-intel`). Он должен:
 
 1. Запустить C-тесты, CLI и тесты Foundation для отчётов/эталонов.
