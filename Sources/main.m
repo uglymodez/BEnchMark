@@ -65,6 +65,20 @@ static NSTextField *Label(NSString *text, CGFloat size, NSFontWeight weight, NSC
     return label;
 }
 
+/* Draw an opaque header so bitmap exports and appearance changes preserve
+   contrast instead of depending on the window's vibrancy backdrop. */
+@interface MBHeaderCell : NSTableHeaderCell
+@end
+@implementation MBHeaderCell
+- (void)drawWithFrame:(NSRect)frame inView:(NSView *)view {
+    [view.effectiveAppearance performAsCurrentDrawingAppearance:^{
+        [NSColor.controlBackgroundColor setFill]; NSRectFill(frame);
+        NSDictionary *attributes=@{NSFontAttributeName:[NSFont systemFontOfSize:11 weight:NSFontWeightMedium],NSForegroundColorAttributeName:NSColor.secondaryLabelColor};
+        [self.stringValue drawInRect:NSInsetRect(frame,6,4) withAttributes:attributes];
+    }];
+}
+@end
+
 @interface MBPoint : NSObject
 @property mb_result result;
 @end
@@ -287,7 +301,7 @@ static NSTextField *Label(NSString *text, CGFloat size, NSFontWeight weight, NSC
     NSArray *titles=@[@"Буфер",@"Операция",@"Медиана",@"Мин. — макс.",@"CV, %",@"К эталону"];
     for (NSUInteger i=0;i<titles.count;++i) {
         NSTableColumn *column=[[NSTableColumn alloc] initWithIdentifier:[NSString stringWithFormat:@"%lu",(unsigned long)i]];
-        column.title=titles[i]; column.width=i==1?190:150; [self.table addTableColumn:column];
+        column.headerCell=[[MBHeaderCell alloc] initTextCell:titles[i]]; column.title=titles[i]; column.width=i==1?190:150; [self.table addTableColumn:column];
     }
     v.tableScroll=[[NSScrollView alloc] initWithFrame:NSZeroRect]; v.tableScroll.documentView=self.table;
     v.tableScroll.hasVerticalScroller=YES; v.tableScroll.borderType=NSBezelBorder;
@@ -535,6 +549,7 @@ static NSTextField *Label(NSString *text, CGFloat size, NSFontWeight weight, NSC
     if (path.length) {
         [self writeSmokeScreenshot:path];
         self.window.appearance=[NSAppearance appearanceNamed:NSAppearanceNameDarkAqua];
+        [self.table reloadData]; [self.table.headerView setNeedsDisplay:YES];
         [self writeSmokeScreenshot:[[path stringByDeletingPathExtension] stringByAppendingString:@"-dark.png"]];
         NSDictionary *report=[self currentReport];
         NSData *json=[NSJSONSerialization dataWithJSONObject:report options:NSJSONWritingPrettyPrinted|NSJSONWritingSortedKeys error:nil];
