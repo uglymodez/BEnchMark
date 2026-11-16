@@ -1,0 +1,66 @@
+name: Memory Lab validation
+on:
+  pull_request:
+  workflow_dispatch:
+    inputs:
+      native_arm64:
+        description: Also run tests and the GUI on a native Apple Silicon runner
+        type: boolean
+        default: false
+permissions:
+  contents: read
+concurrency:
+  group: memory-lab-${{ github.ref }}
+  cancel-in-progress: true
+jobs:
+  portable-core:
+    runs-on: ubuntu-latest
+    timeout-minutes: 10
+    steps:
+      - uses: actions/checkout@v7
+      - name: Core, chain invariants and CLI contracts
+        run: bash test.sh
+      - name: Address and undefined behavior sanitizers
+        run: SANITIZE=1 bash test.sh
+  macos:
+    name: Universal app, Intel runtime validation
+    runs-on: macos-15-intel
+    timeout-minutes: 15
+    steps:
+      - uses: actions/checkout@v7
+      - name: Test native core and report persistence
+        run: bash test.sh
+      - name: Build and verify signed app
+        run: ARCH=universal MB_NO_OPEN=1 bash build.sh
+      - name: Launch AppKit, restore baseline and compare two real sweeps
+        run: |
+          MB_SMOKE_SCREENSHOT="$PWD/build/memory-lab.png" "build/Memory Benchmark.app/Contents/MacOS/MemoryBenchmark" --smoke-test
+      - name: Package universal app
+        run: ditto -c -k --sequesterRsrc --keepParent "build/Memory Benchmark.app" "build/MemoryLab-Universal.zip"
+      - uses: actions/upload-artifact@v7
+        with:
+          name: MemoryLab-Universal
+          path: |
+            build/MemoryLab-*.zip
+            build/memory-bench
+            build/memory-lab*
+          if-no-files-found: error
+  native-arm64:
+    name: Optional native Apple Silicon validation
+    if: github.event_name == 'workflow_dispatch' && inputs.native_arm64
+    runs-on: macos-26
+    timeout-minutes: 15
+    steps:
+      - uses: actions/checkout@v7
+      - name: Test native ARM core and reports
+        run: bash test.sh
+      - name: Build native ARM app
+        run: MB_NO_OPEN=1 bash build.sh
+      - name: Exercise ARM GUI and baseline persistence
+        run: |
+          MB_SMOKE_SCREENSHOT="$PWD/build/memory-lab.png" "build/Memory Benchmark.app/Contents/MacOS/MemoryBenchmark" --smoke-test
+      - uses: actions/upload-artifact@v7
+        with:
+          name: Native-ARM-validation
+          path: build/memory-lab*
+          if-no-files-found: error
