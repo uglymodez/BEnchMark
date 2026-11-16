@@ -143,7 +143,7 @@ static NSTextField *Label(NSString *text, CGFloat size, NSFontWeight weight, NSC
     for (int op=MB_READ;op<=MB_LATENCY;++op) {
         NSColor *color=OperationColor((mb_operation)op);
         NSMutableArray<MBPoint *> *current=[NSMutableArray array];
-        for (MBPoint *p in self.points) if (p.result.operation==op) [current addObject:p];
+        for (MBPoint *p in self.points) if (p.result.operation==(mb_operation)op) [current addObject:p];
         if (current.count>1) {
             NSBezierPath *band=[NSBezierPath bezierPath]; BOOL first=YES;
             for (MBPoint *p in current) {
@@ -161,7 +161,7 @@ static NSTextField *Label(NSString *text, CGFloat size, NSFontWeight weight, NSC
             if (!pass) { CGFloat dash[]={5,5}; [path setLineDash:dash count:2 phase:0]; }
             [[color colorWithAlphaComponent:pass==0?0.45:1] setStroke]; BOOL first=YES;
             for (MBPoint *p in series) {
-                mb_result r=p.result; if (r.operation!=op) continue;
+                mb_result r=p.result; if (r.operation!=(mb_operation)op) continue;
                 NSPoint point=[self position:r value:mb_result_value(&r) plot:plot high:high];
                 if (first) { [path moveToPoint:point]; first=NO; } else [path lineToPoint:point];
                 if (pass) { [color setFill]; [[NSBezierPath bezierPathWithOvalInRect:NSMakeRect(point.x-2,point.y-2,4,4)] fill]; }
@@ -418,7 +418,7 @@ static NSTextField *Label(NSString *text, CGFloat size, NSFontWeight weight, NSC
     mb_operation operation=self.selectedMode==2?MB_WRITE:self.selectedMode==3?MB_LATENCY:MB_READ;
     NSUInteger noisy=0; double worstCV=0;
     for (MBPoint *p in self.points) {
-        if (p.result.operation==operation) primary=p;
+        if (p.result.operation==(mb_operation)operation) primary=p;
         worstCV=fmax(worstCV,p.result.cv_percent); if (p.result.cv_percent>5) ++noisy;
     }
     mb_result r=primary?primary.result:(mb_result){0};

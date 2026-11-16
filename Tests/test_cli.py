@@ -12,8 +12,8 @@ binary = sys.argv[1]
 base = [binary, '--max-mib', '1', '--samples', '3', '--seconds', '0.001']
 result = subprocess.run(base + ['--format', 'json'], capture_output=True, text=True, check=True)
 report = json.loads(result.stdout)
-assert report['schema_version'] == 2 and report['method'] == 'MBM-2.0'
-assert report['state'] in ('complete', 'partial')
+assert report['schema_version'] == 2 and report['metadata']['method'] == 'MBM-2.0'
+assert report['metadata']['state'] in ('complete', 'partial')
 operations = {p['operation'] for p in report['points']}
 assert {'read', 'write', 'latency'} <= operations
 assert len(report['points']) == 33 * len(operations)
@@ -47,5 +47,5 @@ tail = p.stdout.read()
 p.stderr.read()
 assert p.returncode == 130
 partial = json.loads(header + first + tail)
-assert partial['state'] == 'cancelled' and partial['points']
+assert partial['metadata']['state'] == 'cancelled' and partial['points']
 print('PASS: CLI JSON/CSV, raw statistics, descending sweep, argument errors, SIGINT')

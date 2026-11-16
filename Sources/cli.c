@@ -67,11 +67,7 @@ int main(int argc, char **argv) {
     if (gmtime_r(&epoch,&utc)) strftime(started,sizeof(started),"%Y-%m-%dT%H:%M:%SZ",&utc);
     fprintf(stderr,"%s; %s; one thread; samples=%u; seconds/sample=%.3f\n",mb_method_version(),mb_architecture(),samples,seconds);
     if (json) {
-        printf("{\"schema_version\":2,\"method\":\"%s\",\"architecture\":\"%s\",\"started\":\"%s\","
-               "\"profile\":\"%s\",\"samples\":%u,\"seconds_per_sample\":%.6f,\"maximum_bytes\":%zu,"
-               "\"threads\":1,\"order\":\"%s\",\"latency_stride_bytes\":%d,\"points\":[\n",
-               mb_method_version(),mb_architecture(),started,profile,samples,seconds,maximum,
-               descending?"descending":"ascending",MB_LATENCY_STRIDE);
+        puts("{\"schema_version\":2,\"points\":[");
     } else {
         printf("# schema_version: 2\n# method: %s\n# architecture: %s\n# started: %s\n# profile: %s\n"
                "# seconds_per_sample: %.6f\n# samples: %u\n# maximum_bytes: %zu\n# threads: 1\n"
@@ -95,10 +91,10 @@ int main(int argc, char **argv) {
             if (status==MB_CANCELLED) goto done;
             if (status!=MB_OK) { fprintf(stderr,"%s\n",mb_error(ctx)); exit_code=1; goto done; }
             if (json) {
-                printf("%s{\"operation\":\"%s\",\"buffer_bytes\":%zu,\"unit\":\"%s\",\"median\":%.9f,"
+                printf("%s{\"operation\":\"%s\",\"operation_id\":%d,\"buffer_bytes\":%zu,\"unit\":\"%s\",\"median\":%.9f,"
                        "\"minimum\":%.9f,\"maximum\":%.9f,\"cv_percent\":%.6f,\"total_sample_seconds\":%.9f,"
                        "\"iterations\":%llu,\"samples\":%u,\"sample_values\":[",
-                       emitted?",\n":"",mb_operation_name(r.operation),r.bytes,mb_operation_unit(r.operation),
+                       emitted?",\n":"",mb_operation_name(r.operation),(int)r.operation,r.bytes,mb_operation_unit(r.operation),
                        mb_result_value(&r),mb_result_minimum(&r),mb_result_maximum(&r),r.cv_percent,
                        r.seconds,(unsigned long long)r.passes,r.samples);
                 for (unsigned k=0;k<r.samples;++k) printf("%s%.9f",k?",":"",r.sample_values[k]);
@@ -119,7 +115,15 @@ int main(int argc, char **argv) {
 done:
     if (interrupted) exit_code=128+interrupted;
     const char *state=interrupted?"cancelled":exit_code?"error":unavailable?"partial":"complete";
-    if (json) printf("\n],\"state\":\"%s\",\"execute_available\":%s}\n",state,unavailable?"false":"true");
+    if (json) {
+        printf("\n],\"metadata\":{\"method\":\"%s\",\"architecture\":\"%s\",\"started\":\"%s\","
+               "\"profile\":\"%s\",\"samples\":%u,\"seconds_per_sample\":%.6f,\"maximum_bytes\":%zu,"
+               "\"threads\":1,\"order\":\"%s\",\"latency_stride_bytes\":%d,"
+               "\"state\":\"%s\",\"complete\":%s,\"execute_available\":%s}}\n",
+               mb_method_version(),mb_architecture(),started,profile,samples,seconds,maximum,
+               descending?"descending":"ascending",MB_LATENCY_STRIDE,state,
+               !interrupted && !exit_code && !unavailable?"true":"false",unavailable?"false":"true");
+    }
     else printf("# state: %s\n# execute_available: %s\n",state,unavailable?"false":"true");
     mb_destroy(ctx);
     if (ferror(stdout) && !exit_code) exit_code=1;
