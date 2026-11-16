@@ -12,14 +12,18 @@ if ! xcrun --find clang >/dev/null 2>&1; then
     exit 1
 fi
 BUILD_ARCH="${ARCH:-$(uname -m)}"
-case "$BUILD_ARCH" in arm64|x86_64) ;; *) echo 'Поддерживаются arm64 и x86_64'; exit 1;; esac
+case "$BUILD_ARCH" in
+    arm64|x86_64) ARCH_FLAGS=(-arch "$BUILD_ARCH");;
+    universal) ARCH_FLAGS=(-arch arm64 -arch x86_64);;
+    *) echo 'Поддерживаются arm64, x86_64 и universal'; exit 1;;
+esac
 SDK_DIR="$(xcrun --sdk macosx --show-sdk-path)"
 BUILD_DIR="$ROOT_DIR/build"
 TEMP_DIR="$(mktemp -d "$ROOT_DIR/.build.XXXXXX")"
 trap 'rm -rf -- "$TEMP_DIR"' EXIT
 APP_PATH="$BUILD_DIR/Memory Benchmark.app"
 mkdir -p "$BUILD_DIR"
-CC=(xcrun --sdk macosx clang -arch "$BUILD_ARCH" -isysroot "$SDK_DIR" -mmacosx-version-min=12.0 -O3 -Wall -Wextra -Werror)
+CC=(xcrun --sdk macosx clang "${ARCH_FLAGS[@]}" -isysroot "$SDK_DIR" -mmacosx-version-min=12.0 -O3 -Wall -Wextra -Werror)
 echo "Собираю Memory Benchmark для ${BUILD_ARCH}..."
 "${CC[@]}" -std=c11 -c Sources/benchmark.c -o "$TEMP_DIR/benchmark.o"
 "${CC[@]}" -fobjc-arc -c Sources/main.m -o "$TEMP_DIR/main.o"
@@ -35,7 +39,11 @@ for BINARY in "$TEMP_DIR/memory-bench" "$TEMP_DIR/test_core"; do
 done
 codesign --force --sign - --options runtime --entitlements Resources/Entitlements.plist "$TEMP_DIR/Memory Benchmark.app"
 codesign --verify --strict --verbose=2 "$TEMP_DIR/Memory Benchmark.app"
-if [[ "$BUILD_ARCH" == "$(uname -m)" ]]; then
+if [[ "$BUILD_ARCH" == universal ]]; then
+    lipo -verify_arch arm64 x86_64 "$TEMP_DIR/Memory Benchmark.app/Contents/MacOS/MemoryBenchmark"
+    lipo -verify_arch arm64 x86_64 "$TEMP_DIR/memory-bench"
+fi
+if [[ "$BUILD_ARCH" == "$(uname -m)" || "$BUILD_ARCH" == universal ]]; then
     echo 'Проверяю измерительное ядро на этом Mac…'
     "$TEMP_DIR/test_core"
 fi

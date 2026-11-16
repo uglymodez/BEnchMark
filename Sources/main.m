@@ -130,7 +130,7 @@ static NSTextField *Label(NSString *text, CGFloat size, NSFontWeight weight, NSC
     NSRect plot=NSMakeRect(64,76,MAX(1,w-88),MAX(1,h-120));
     double high=1;
     for (NSArray *series in @[self.points,self.baseline ?: @[]])
-        for (MBPoint *p in series) { mb_result r=p.result; high=fmax(high,mb_result_maximum(&r)*1.12); }
+        for (MBPoint *p in series) { mb_result r=p.result; high=fmax(high,(series==self.points?mb_result_maximum(&r):mb_result_value(&r))*1.12); }
     double magnitude=pow(10,floor(log10(high/5))), step=ceil(high/5/magnitude)*magnitude; high=step*5;
     NSColor *grid=[NSColor colorWithWhite:1 alpha:0.09], *muted=[NSColor colorWithRed:0.51 green:0.61 blue:0.74 alpha:1];
     double maxLog=fmax(1,log2((double)self.maximum/4096));
@@ -151,8 +151,9 @@ static NSTextField *Label(NSString *text, CGFloat size, NSFontWeight weight, NSC
     }
     [self text:self.mode==3?@"ns/load":@"GB/s" at:NSMakePoint(12,57) color:muted size:10];
     [self text:@"РАБОЧИЙ НАБОР · LOG₂" at:NSMakePoint(w-192,h-17) color:muted size:9];
-    NSString *legend=@[@"● ЧТЕНИЕ  +  ● КОД*",@"● ЧТЕНИЕ ПАМЯТИ",@"● ЗАПИСЬ ПАМЯТИ",@"● ЗАДЕРЖКА · МЕНЬШЕ ЛУЧШЕ"][self.mode];
+    NSString *legend=@[@"● ЧТЕНИЕ",@"● ЧТЕНИЕ ПАМЯТИ",@"● ЗАПИСЬ ПАМЯТИ",@"● ЗАДЕРЖКА · МЕНЬШЕ ЛУЧШЕ"][self.mode];
     [self text:legend at:NSMakePoint(20,16) color:OperationColor(self.mode==2?MB_WRITE:self.mode==3?MB_LATENCY:MB_READ) size:12];
+    if (self.mode==0) [self text:@"● КОД*" at:NSMakePoint(180,16) color:OperationColor(MB_EXECUTE) size:12];
     [self text:self.baseline.count?@"ПУНКТИР — ЭТАЛОН":@"ПОЛОСА — MIN–MAX" at:NSMakePoint(w-198,18) color:muted size:10];
     for (int op=MB_READ;op<=MB_LATENCY;++op) {
         NSColor *color=OperationColor((mb_operation)op);
