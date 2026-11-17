@@ -27,6 +27,9 @@ typedef struct {
     double minimum_nanoseconds_per_load;
     double maximum_nanoseconds_per_load;
     double sample_values[MB_MAX_SAMPLES]; /* Chronological, in mb_operation_unit(). */
+    double sample_seconds[MB_MAX_SAMPLES];
+    uint64_t sample_iterations[MB_MAX_SAMPLES];
+    uint64_t work_units_per_iteration; /* bytes; loads for MB_LATENCY */
     double cv_percent; /* Population standard deviation / mean, percent. */
 } mb_result;
 

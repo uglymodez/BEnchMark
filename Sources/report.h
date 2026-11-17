@@ -11,3 +11,5 @@ NSArray<NSDictionary *> *MBRangeSummary(NSDictionary *report);
 
 
 NSArray<NSDictionary *> *MBBlockSummary(NSDictionary *report);
+
+NSString *MBTimingDescription(NSDictionary *report);

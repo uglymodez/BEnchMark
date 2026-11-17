@@ -6,6 +6,18 @@
 #include <stdio.h>
 #include <time.h>
 
+static void verify_timing(mb_result r) {
+    assert(r.work_units_per_iteration>0);
+    uint64_t iterations=0; double seconds=0;
+    for (unsigned i=0;i<r.samples;++i) {
+        assert(r.sample_seconds[i]>0 && r.sample_iterations[i]>0);
+        double expected=r.operation==MB_LATENCY?r.sample_seconds[i]*1e9/r.sample_iterations[i]:
+            (double)r.work_units_per_iteration*r.sample_iterations[i]/r.sample_seconds[i]/1e9;
+        assert(fabs(expected-r.sample_values[i])<1e-9*fmax(1,expected));
+        iterations+=r.sample_iterations[i]; seconds+=r.sample_seconds[i];
+    }
+    assert(iterations==r.passes && seconds==r.seconds);
+}
 static void *cancel_later(void *p) {
     struct timespec delay={0,20000000}; nanosleep(&delay,NULL); mb_cancel(p); return NULL;
 }
@@ -64,6 +76,7 @@ int main(void) {
                 fprintf(stderr,"SKIP execute: %s\n",mb_error(ctx)); break;
             }
             assert(status==MB_OK);
+            verify_timing(r);
             assert(r.bytes==n && r.samples==3 && r.passes>=3 && r.seconds>=0.006);
             assert(isfinite(mb_result_value(&r)) && mb_result_value(&r)>0);
             assert(mb_result_minimum(&r)<=mb_result_value(&r) && mb_result_maximum(&r)>=mb_result_value(&r));
@@ -105,6 +118,7 @@ int main(void) {
         const size_t strides[]={block,1024,4096,11264};
         for (unsigned i=0;i<4;++i) {
             assert(mb_measure_blocks(ctx,(mb_operation)op,65536,block,strides[i],.001,3,&r)==MB_OK);
+            verify_timing(r);
             assert(r.block_bytes==block && r.stride_bytes==strides[i] && r.samples==3 && r.passes>=3);
             assert(r.minimum_gb_per_second<=mb_result_mean(&r) && mb_result_mean(&r)<=r.maximum_gb_per_second);
             // Harmonic aggregate from elapsed times must lie between sample extrema.
