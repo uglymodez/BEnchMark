@@ -100,6 +100,26 @@ int main(void) {
     pthread_join(worker,NULL);
     assert(mb_measure(ctx,MB_WRITE,4096,0.002,3,&r)==MB_CANCELLED);
     mb_destroy(ctx);
+    ctx=mb_create(); assert(ctx);
+    for (size_t block=32;block<=256;block*=2) for (int op=0;op<2;++op) {
+        const size_t strides[]={block,1024,4096,11264};
+        for (unsigned i=0;i<4;++i) {
+            assert(mb_measure_blocks(ctx,(mb_operation)op,65536,block,strides[i],.001,3,&r)==MB_OK);
+            assert(r.block_bytes==block && r.stride_bytes==strides[i] && r.samples==3 && r.passes>=3);
+            assert(r.minimum_gb_per_second<=mb_result_mean(&r) && mb_result_mean(&r)<=r.maximum_gb_per_second);
+            // Harmonic aggregate from elapsed times must lie between sample extrema.
+            size_t useful=((r.bytes-block)/strides[i]+1)*block;
+            double aggregate=(double)useful*r.passes/r.seconds/1e9;
+            assert(aggregate>=r.minimum_gb_per_second*(1-1e-12) && aggregate<=r.maximum_gb_per_second*(1+1e-12));
+        }
+    }
+    assert(mb_measure_blocks(ctx,MB_EXECUTE,65536,32,1024,.001,3,&r)==MB_ERROR);
+    assert(mb_measure_blocks(ctx,MB_READ,65536,16,1024,.001,3,&r)==MB_ERROR);
+    assert(mb_measure_blocks(ctx,MB_READ,65536,32,1025,.001,3,&r)==MB_ERROR);
+    assert(mb_measure_blocks(ctx,MB_READ,65536,32,1024,NAN,3,&r)==MB_ERROR);
+    assert(pthread_create(&worker,NULL,cancel_later,ctx)==0);
+    assert(mb_measure_blocks(ctx,MB_WRITE,65536,128,4096,.2,9,&r)==MB_CANCELLED);
+    pthread_join(worker,NULL); mb_destroy(ctx);
     puts("PASS: sweep, four workloads, raw samples, statistics, mapping reuse, cancellation");
     return 0;
 }

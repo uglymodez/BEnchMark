@@ -15,6 +15,7 @@ typedef struct {
 } mb_statistics;
 typedef struct {
     size_t bytes;
+    size_t block_bytes, stride_bytes; /* Zero for legacy workloads. */
     mb_operation operation;
     double gb_per_second; /* Decimal GB/s; instruction footprint/s for EXECUTE. */
     double minimum_gb_per_second;
@@ -49,6 +50,11 @@ int mb_summarize(const double *values, unsigned count, mb_statistics *statistics
 /* Sizes: 4 KiB .. 1 GiB, multiples of 256. Execute: up to 64 MiB. */
 mb_status mb_measure(mb_context *ctx, mb_operation operation, size_t bytes,
                      double sample_seconds, unsigned samples, mb_result *result);
+/* Block stride workload: 32/64/128/256 byte blocks, contiguous baseline or
+   strides 1024..11264 in 256-byte steps. Counts only useful accessed bytes. */
+#define MB_BLOCK_STEPS 41
+mb_status mb_measure_blocks(mb_context *ctx, mb_operation op, size_t bytes,
+    size_t block, size_t stride, double seconds, unsigned samples, mb_result *out);
 /* Quarter-octave sizes; returns count, or 0 for invalid/insufficient capacity. */
 size_t mb_sizes(size_t maximum, size_t *sizes, size_t capacity);
 /* Five representative buffers, not detected hardware cache levels.

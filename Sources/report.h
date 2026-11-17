@@ -9,3 +9,5 @@ BOOL MBValidReport(id report);
 /* Five summary rows. Percentages appear only after a valid complete sweep. */
 NSArray<NSDictionary *> *MBRangeSummary(NSDictionary *report);
 
+
+NSArray<NSDictionary *> *MBBlockSummary(NSDictionary *report);
