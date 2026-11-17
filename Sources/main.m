@@ -1,6 +1,8 @@
 #import <Cocoa/Cocoa.h>
 #include <sys/sysctl.h>
 #include <math.h>
+#include <execinfo.h>
+#include <unistd.h>
 #include "benchmark.h"
 #import "report.h"
 
@@ -708,10 +710,12 @@ static NSTextField *Label(NSString *text, CGFloat size, NSFontWeight weight, NSC
 }
 - (void)testNavigationDuringRun {
     if (!self.running) { fprintf(stderr,"Navigation test missed running state\n"); exit(1); }
+    fprintf(stderr,"SMOKE navigation start\n");
     NSInteger mode=self.activeMode;
     NSArray *original=[self.resultsByMode[@(mode)] copy];
     mb_context *context=self.context;
     for (NSInteger tab=0;tab<5;++tab) {
+        fprintf(stderr,"SMOKE tab %ld\n",(long)tab);
         self.content.tabs.selectedSegment=tab;
         [NSApp sendAction:self.content.tabs.action to:self.content.tabs.target from:self.content.tabs];
         [self.content layoutSubtreeIfNeeded];
@@ -730,6 +734,7 @@ static NSTextField *Label(NSString *text, CGFloat size, NSFontWeight weight, NSC
     if (tab<3) self.experiments[@(tab)]=@(mode);
     self.content.tabs.selectedSegment=tab; [self changeTab:nil];
     if (self.selectedMode!=mode || self.content.chart.points.count!=original.count) exit(1);
+    fprintf(stderr,"SMOKE navigation complete\n");
     if (self.navigationTest && self.smokePass==0) {
         self.content.tabs.selectedSegment=4; [self changeTab:nil];
         [self startOrStop:nil];
@@ -847,9 +852,13 @@ static NSTextField *Label(NSString *text, CGFloat size, NSFontWeight weight, NSC
 
 @end
 
+static void SmokeSignal(int number) {
+    void *stack[80]; int count=backtrace(stack,80); backtrace_symbols_fd(stack,count,STDERR_FILENO); _Exit(128+number);
+}
 int main(int argc,const char *argv[]) {
     (void)argc; (void)argv;
     @autoreleasepool {
+        if ([NSProcessInfo.processInfo.arguments containsObject:@"--smoke-test"]) { signal(SIGSEGV,SmokeSignal); signal(SIGABRT,SmokeSignal); }
         NSApplication *app=NSApplication.sharedApplication;
         [app setActivationPolicy:NSApplicationActivationPolicyRegular];
         __attribute__((objc_precise_lifetime)) MBApp *delegate=[MBApp new]; app.delegate=delegate;

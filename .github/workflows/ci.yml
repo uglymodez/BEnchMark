@@ -54,8 +54,8 @@ jobs:
             build/memory-lab*
           if-no-files-found: error
   native-arm64:
-    name: Optional native Apple Silicon validation
-    if: github.event_name == 'workflow_dispatch' && inputs.native_arm64
+    name: Native Apple Silicon validation
+    if: github.event_name == 'pull_request' || inputs.native_arm64
     runs-on: macos-26
     timeout-minutes: 15
     steps:
@@ -67,6 +67,11 @@ jobs:
       - name: Exercise ARM GUI and baseline persistence
         run: |
           MB_SMOKE_SCREENSHOT="$PWD/build/memory-lab.png" "build/Memory Benchmark.app/Contents/MacOS/MemoryBenchmark" --smoke-test
+      - name: Exercise ARM cache, block kernels and navigation
+        run: |
+          for mode in cache blocks-read navigation; do
+            MB_SMOKE_MODE="$mode" MB_SMOKE_SCREENSHOT="$PWD/build/memory-lab-$mode.png" "build/Memory Benchmark.app/Contents/MacOS/MemoryBenchmark" --smoke-test
+          done
       - uses: actions/upload-artifact@v7
         with:
           name: Native-ARM-validation
