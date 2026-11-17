@@ -19,6 +19,17 @@ int main(void) {
     assert(mb_sizes(1024*1024,sizes,2)==0);
     count=mb_sizes(1024UL*1024*1024,sizes,80); assert(count==73);
     assert(mb_sizes(65536+256,sizes,80)==18);
+    for (size_t maximum=64UL*1024*1024;maximum<=1024UL*1024*1024;maximum*=2) {
+        assert(mb_compact_sizes(maximum,sizes,80)==5);
+        assert(sizes[0]==4096 && sizes[1]==65536 && sizes[2]==1024*1024 && sizes[3]==16*1024*1024 && sizes[4]==maximum);
+        for (size_t i=1;i<5;++i) assert(sizes[i]>sizes[i-1]);
+    }
+    assert(mb_compact_sizes(32*1024*1024,sizes,80)==0);
+    assert(mb_compact_sizes(64*1024*1024,sizes,4)==0);
+    assert(mb_compact_sizes(64*1024*1024,NULL,80)==0);
+    mb_result asymmetric={.samples=3,.sample_values={1,2,9}};
+    assert(mb_result_mean(&asymmetric)==4);
+    assert(mb_result_mean(NULL)==0);
     mb_context *ctx=mb_create(); assert(ctx);
     mb_result r;
     assert(mb_measure(ctx,MB_READ,4097,0.002,3,&r)==MB_ERROR);
@@ -71,4 +82,5 @@ int main(void) {
     puts("PASS: sweep, four workloads, raw samples, statistics, mapping reuse, cancellation");
     return 0;
 }
+
 

@@ -43,6 +43,7 @@ const char *mb_operation_unit(mb_operation operation);
 double mb_result_value(const mb_result *result);
 double mb_result_minimum(const mb_result *result);
 double mb_result_maximum(const mb_result *result);
+double mb_result_mean(const mb_result *result);
 /* Rejects nonfinite/nonpositive values; does not mutate input. */
 int mb_summarize(const double *values, unsigned count, mb_statistics *statistics);
 /* Sizes: 4 KiB .. 1 GiB, multiples of 256. Execute: up to 64 MiB. */
@@ -50,5 +51,9 @@ mb_status mb_measure(mb_context *ctx, mb_operation operation, size_t bytes,
                      double sample_seconds, unsigned samples, mb_result *result);
 /* Quarter-octave sizes; returns count, or 0 for invalid/insufficient capacity. */
 size_t mb_sizes(size_t maximum, size_t *sizes, size_t capacity);
+/* Five representative buffers, not detected hardware cache levels.
+   4 KiB, 64 KiB, 1 MiB, 16 MiB, maximum (64 MiB .. 1 GiB). */
+size_t mb_compact_sizes(size_t maximum, size_t *sizes, size_t capacity);
 #endif
+
 
