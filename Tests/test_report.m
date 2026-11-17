@@ -63,7 +63,7 @@ int main(void) {
         NSUInteger row=0;
         for (NSString *line in lines) if ([line hasPrefix:@"read,"] || [line hasPrefix:@"write,"]) {
             NSArray *fields=[line componentsSeparatedByString:@","];
-            assert(fields.count==21);
+            assert(fields.count==24);
             NSString *op=fields[0]; NSDictionary *value=summary[row/2][op];
             assert(fabs([fields[19] doubleValue]-[value[@"mean"] doubleValue])<1e-8);
             assert(fabs([fields[20] doubleValue]-[value[@"relative_speed_percent"] doubleValue])<1e-5);
@@ -79,7 +79,7 @@ int main(void) {
         assert(MBDecodePoint(forged,&restored) && mb_result_mean(&restored)==4);
         rangeMeta[@"complete"]=@NO; assert(!MBValidReport(ranges));
         for (NSDictionary *entry in MBRangeSummary(ranges)) assert(!entry[@"read"][@"relative_speed_percent"]);
-        assert([MBCSV(ranges) containsString:@",4.000000000,\n"]);
+        assert([MBCSV(ranges) containsString:@",4.000000000,,0,0,"]);
         rangeMeta[@"complete"]=@YES;
         ranges[@"points"]=[rangePoints subarrayWithRange:NSMakeRange(0,9)]; assert(!MBValidReport(ranges));
         for (NSDictionary *entry in MBRangeSummary(ranges)) assert(!entry[@"write"][@"relative_speed_percent"]);
@@ -110,7 +110,7 @@ int main(void) {
         NSUInteger csvCount=0, percentCount=0;
         for (NSString *line in [MBCSV(ranges) componentsSeparatedByString:@"\n"]) if ([line hasPrefix:@"read,"] || [line hasPrefix:@"write,"]) {
             NSArray *fields=[line componentsSeparatedByString:@","];
-            assert(fields.count==21); ++csvCount;
+            assert(fields.count==24); ++csvCount;
             if ([fields[20] length]) ++percentCount;
             else assert([fields[19] doubleValue]==1000);
         }
@@ -122,7 +122,58 @@ int main(void) {
         ranges[@"points"]=missing; assert(!MBValidReport(ranges));
         ranges[@"points"]=rangePoints; assert(!MBValidReport(ranges)); // sparse data cannot masquerade as dense
         ranges[@"points"]=densePoints; rangeMeta[@"sweep"]=@"compact-5-v1"; assert(!MBValidReport(ranges));
+        // Cache view restores read + code while keeping all five summary anchors.
+        rangeMeta[@"mode"]=@"Cache Profile"; rangeMeta[@"sweep"]=@"cache-dense-v1";
+        NSMutableArray *cachePoints=[NSMutableArray array];
+        for (NSDictionary *record in densePoints) {
+            mb_result value; assert(MBDecodePoint(record,&value));
+            if (value.operation==MB_WRITE) value.operation=MB_EXECUTE;
+            [cachePoints addObject:MBPointRecord(value)];
+        }
+        ranges[@"points"]=cachePoints; assert(MBValidReport(ranges));
+        assert(MBRangeSummary(ranges).count==5 && MBRangeSummary(ranges)[0][@"execute_proxy"]);
+        // Four block series: persist signed gaps and reject missing/duplicated coordinates.
+        assert(mb_measure_blocks(ctx,MB_READ,4096,32,-128,.001,3,&r)==MB_OK);
+        NSDictionary *blockPoint=MBPointRecord(r); assert(MBDecodePoint(blockPoint,&restored));
+        assert(restored.block_bytes==32 && restored.access_gap_bytes==-128);
+        for (id invalid in @[@16,@33,@(-1),@(1e20),NSNull.null]) {
+            broken=[blockPoint mutableCopy]; broken[@"block_bytes"]=invalid; assert(!MBDecodePoint(broken,&restored));
+        }
+        broken=[blockPoint mutableCopy]; broken[@"access_gap_bytes"]=@0.5; assert(!MBDecodePoint(broken,&restored));
+        NSMutableDictionary *blockMeta=[meta mutableCopy];
+        blockMeta[@"mode"]=@"Read Blocks"; blockMeta[@"sweep"]=@"block-gap-v1";
+        int gaps[MB_GAP_CAPACITY]; assert(mb_access_gaps(gaps,MB_GAP_CAPACITY)==47);
+        NSMutableArray *blockPoints=[NSMutableArray array];
+        for (unsigned i=0;i<MB_GAP_CAPACITY;++i) for (unsigned block=32;block<=256;block*=2) {
+            double value=gaps[i]==0?10:20;
+            mb_result sample={.bytes=4096,.operation=MB_READ,.block_bytes=block,.access_gap_bytes=gaps[i],
+                .samples=3,.seconds=.003,.passes=30,.sample_values={value,value,value}};
+            [blockPoints addObject:MBPointRecord(sample)];
+        }
+        NSMutableDictionary *blocks=[@{@"schema_version":@2,@"metadata":blockMeta,@"points":blockPoints} mutableCopy];
+        assert(MBValidReport(blocks) && MBComparable(blockMeta,blockMeta));
+        NSArray *blockSummary=MBBlockSummary(blocks); assert(blockSummary.count==4);
+        for (NSDictionary *row in blockSummary) {
+            assert([row[@"conditions"] unsignedIntegerValue]==47);
+            assert([row[@"minimum"] doubleValue]==10 && [row[@"maximum"] doubleValue]==20 && [row[@"linear"] doubleValue]==10);
+            assert(fabs([row[@"mean"] doubleValue]-930.0/47)<1e-9);
+            assert(fabs([row[@"relative_speed_percent"] doubleValue]-9300.0/47)<1e-9); // >100 is legitimate
+        }
+        data=[NSJSONSerialization dataWithJSONObject:blocks options:0 error:nil];
+        decoded=[NSJSONSerialization JSONObjectWithData:data options:0 error:nil];
+        assert(MBValidReport(decoded) && [MBBlockSummary(decoded) isEqual:blockSummary]);
+        assert([MBCSV(blocks) containsString:@"block_bytes,access_gap_bytes,accessed_bytes_per_pass"]);
+        assert([MBCSV(blocks) containsString:@",32,-3072,64\n"]);
+        blockMeta[@"complete"]=@NO; assert(!MBValidReport(blocks));
+        for (NSDictionary *row in MBBlockSummary(blocks)) assert(!row[@"relative_speed_percent"]);
+        blockMeta[@"complete"]=@YES;
+        NSMutableArray *badPoints=[blockPoints mutableCopy]; badPoints[1]=badPoints[0];
+        blocks[@"points"]=badPoints; assert(!MBValidReport(blocks));
+        blocks[@"points"]=[blockPoints subarrayWithRange:NSMakeRange(0,187)]; assert(!MBValidReport(blocks));
+        blocks[@"points"]=blockPoints; blockMeta[@"sweep"]=@"other"; assert(!MBValidReport(blocks));
+        assert(!MBComparable(blockMeta,decoded[@"metadata"]));
         mb_destroy(ctx); puts("PASS: JSON round trip, malformed reports, comparison compatibility, CSV units");
     }
 }
+
 

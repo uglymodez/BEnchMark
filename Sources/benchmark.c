@@ -385,3 +385,98 @@ size_t mb_sizes(size_t max, size_t *sizes, size_t capacity) {
 }
 
 
+
+
+size_t mb_access_gaps(int *gaps, size_t capacity) {
+    if (!gaps || capacity < MB_GAP_CAPACITY) return 0;
+    size_t count=0;
+    for (int gap=-3072;gap<=7168;gap+=256) {
+        if (gap==0) {
+            const int near[]={-128,-64,-32,0,32,64,128};
+            for (unsigned j=0;j<7;++j) gaps[count++]=near[j];
+        } else gaps[count++]=gap;
+    }
+    return count;
+}
+size_t mb_block_visits(size_t bytes, unsigned block, int gap) {
+    if ((block!=32 && block!=64 && block!=128 && block!=256) ||
+        bytes<MB_MIN || bytes>MB_MAX || bytes%256 || gap<-3072 || gap>7168 || gap%16) return 0;
+    size_t step=block+(size_t)(gap<0?-gap:gap);
+    return (bytes-block)/step+1;
+}
+
+/* Same explicit 128-bit operations on both architectures. The block loop and
+   address traversal are part of this workload, not subtracted from its time. */
+static NOINLINE void block_pass(mb_context *ctx, mb_operation op, size_t n,
+                               unsigned block, int gap) {
+    size_t visits=mb_block_visits(n,block,gap), step=block+(size_t)abs(gap);
+    size_t offset=gap<0?(visits-1)*step:0;
+#if defined(__aarch64__)
+    uint64x2_t a=vdupq_n_u64(0), b=a, v=vdupq_n_u64(UINT64_C(0x9e3779b97f4a7c15));
+#else
+    __m128i a=_mm_setzero_si128(), b=a, v=_mm_set1_epi64x((long long)UINT64_C(0x9e3779b97f4a7c15));
+#endif
+    for (size_t i=0;i<visits;++i) {
+        unsigned char *p=ctx->data+offset;
+        for (unsigned j=0;j<block;j+=32) {
+#if defined(__aarch64__)
+            if (op==MB_WRITE) __asm__ volatile("stp %q0, %q0, [%1]" :: "w"(v),"r"(p+j):"memory");
+            else {
+                uint64x2_t x,y;
+                __asm__ volatile("ldp %q0, %q1, [%2]":"=&w"(x),"=&w"(y):"r"(p+j):"memory");
+                a=veorq_u64(a,x); b=veorq_u64(b,y);
+            }
+#else
+            if (op==MB_WRITE) __asm__ volatile("movdqa %0, 0(%1)\n\tmovdqa %0, 16(%1)" :: "x"(v),"r"(p+j):"memory");
+            else {
+                __m128i x,y;
+                __asm__ volatile("movdqa 0(%2), %0\n\tmovdqa 16(%2), %1":"=&x"(x),"=&x"(y):"r"(p+j):"memory");
+                a=_mm_xor_si128(a,x); b=_mm_xor_si128(b,y);
+            }
+#endif
+        }
+        if ((i&4095)==0 && mb_is_cancelled(ctx)) return;
+        if (i+1<visits) offset=gap<0?offset-step:offset+step;
+    }
+#if defined(__aarch64__)
+    a=veorq_u64(a,b); ctx->sink^=vgetq_lane_u64(a,0)^vgetq_lane_u64(a,1);
+#else
+    a=_mm_xor_si128(a,b); ctx->sink^=(uint64_t)_mm_cvtsi128_si64(a)^(uint64_t)_mm_cvtsi128_si64(_mm_srli_si128(a,8));
+#endif
+}
+mb_status mb_measure_blocks(mb_context *ctx, mb_operation op, size_t n,
+                            unsigned block, int gap, double duration,
+                            unsigned count, mb_result *out) {
+    if (!ctx || !out) return MB_ERROR;
+    memset(out,0,sizeof(*out)); ctx->error[0]=0;
+    size_t visits=mb_block_visits(n,block,gap);
+    if ((op!=MB_READ && op!=MB_WRITE) || !visits || !isfinite(duration) ||
+        duration<0.001 || duration>1 || count<1 || count>MB_MAX_SAMPLES) {
+        problem(ctx,"Invalid block experiment settings."); return MB_ERROR;
+    }
+    if (mb_is_cancelled(ctx)) return MB_CANCELLED;
+    mb_status status=prepare_data(ctx,n); if (status!=MB_OK) return status;
+    block_pass(ctx,op,n,block,gap);
+    if (op==MB_WRITE) finish_stores();
+    size_t traffic=visits*block, batch=(1024*1024)/traffic;
+    if (!batch) batch=1;
+    double rates[MB_MAX_SAMPLES], elapsed_total=0; uint64_t total=0;
+    for (unsigned s=0;s<count;++s) {
+        if (mb_is_cancelled(ctx)) return MB_CANCELLED;
+        double start=now(), elapsed; uint64_t passes=0;
+        do {
+            for (size_t k=0;k<batch;++k) block_pass(ctx,op,n,block,gap);
+            if (op==MB_WRITE) finish_stores();
+            passes+=batch; elapsed=now()-start;
+            if (mb_is_cancelled(ctx)) return MB_CANCELLED;
+        } while (elapsed<duration);
+        rates[s]=(double)traffic*(double)passes/elapsed/1e9;
+        elapsed_total+=elapsed; total+=passes;
+    }
+    mb_statistics stats;
+    if (!mb_summarize(rates,count,&stats)) { problem(ctx,"Invalid block sample statistics."); return MB_ERROR; }
+    out->bytes=n; out->operation=op; out->block_bytes=block; out->access_gap_bytes=gap;
+    out->samples=count; out->passes=total; out->seconds=elapsed_total; out->cv_percent=stats.cv_percent;
+    out->gb_per_second=stats.median; out->minimum_gb_per_second=stats.minimum; out->maximum_gb_per_second=stats.maximum;
+    memcpy(out->sample_values,rates,count*sizeof(double)); return MB_OK;
+}
