@@ -319,6 +319,13 @@ static NSTextField *Label(NSString *text, CGFloat size, NSFontWeight weight, NSC
     CGFloat y=220+chartHeight+14;
     for (NSUInteger i=0;i<self.stats.count;++i) self.stats[i].frame=NSMakeRect(gap+i*(w-2*gap)/3,y,(w-2*gap)/3-10,42);
     self.tableScroll.frame=NSMakeRect(gap,y+52,w-2*gap,160);
+    NSTableView *table=(NSTableView *)self.tableScroll.documentView;
+    if (table.tableColumns.count) {
+        CGFloat width=self.tableScroll.contentSize.width;
+        NSRect frame=table.frame; frame.size.width=width; table.frame=frame;
+        CGFloat columnWidth=(width-table.intercellSpacing.width*table.tableColumns.count)/table.tableColumns.count;
+        for (NSTableColumn *column in table.tableColumns) column.width=columnWidth;
+    }
     self.noteLabel.frame=NSMakeRect(gap,h-110,w-2*gap,32);
     self.startButton.frame=NSMakeRect(w-178,h-47,154,30);
     self.baselineButton.frame=NSMakeRect(gap,h-47,192,30);
@@ -397,7 +404,7 @@ static NSTextField *Label(NSString *text, CGFloat size, NSFontWeight weight, NSC
     v.stats=stats;
     self.table=[[NSTableView alloc] initWithFrame:NSZeroRect]; self.table.dataSource=self; self.table.delegate=self;
     self.table.usesAlternatingRowBackgroundColors=YES; self.table.rowHeight=24;
-    self.table.columnAutoresizingStyle=NSTableViewUniformColumnAutoresizingStyle;
+    self.table.columnAutoresizingStyle=NSTableViewNoColumnAutoresizing;
     [self configureTable];
     v.tableScroll=[[NSScrollView alloc] initWithFrame:NSZeroRect]; v.tableScroll.documentView=self.table;
     v.tableScroll.hasVerticalScroller=YES; v.tableScroll.borderType=NSBezelBorder;
@@ -496,6 +503,7 @@ static NSTextField *Label(NSString *text, CGFloat size, NSFontWeight weight, NSC
     NSDictionary *meta=self.metadataByMode[@(mode)];
     const size_t maxima[]={64UL*1024*1024,256UL*1024*1024,512UL*1024*1024,1024UL*1024*1024};
     self.content.chart.maximum=meta?[meta[@"maximum_bytes"] unsignedLongLongValue]:maxima[self.content.maximumPopup.indexOfSelectedItem];
+    [self.content.chart setAccessibilityLabel:BlockMode(mode)?@"Скорость блоков 32, 64, 128 и 256 байт по пропуску между обращениями. Сводка в таблице.":@"Скорость или задержка по размеру рабочего набора. Сводка в таблице."];
     [self configureTable]; [self refreshResults];
     self.table.dataSource=self; self.table.delegate=self; [self.table reloadData]; [self updateControls];
     [self.content setNeedsLayout:YES];
@@ -690,7 +698,7 @@ static NSTextField *Label(NSString *text, CGFloat size, NSFontWeight weight, NSC
                 self.running=NO; self.context=NULL; self.stopping=NO; self.activeMode=-1; mb_destroy(ctx);
                 [NSProcessInfo.processInfo endActivity:self.activity]; self.activity=nil;
                 NSString *state=failure?@"Ошибка · частичные результаты":cancelled?@"Остановлен · частичные результаты":@"Готово";
-                metadata[@"state"]=state; metadata[@"complete"]=@(!cancelled && !failure && completed==total);
+                metadata[@"state"]=state; metadata[@"complete"]=(!cancelled && !failure && completed==total)?@YES:@NO;
                 metadata[@"thermal_peak"]=@(MAX([metadata[@"thermal_peak"] integerValue],NSProcessInfo.processInfo.thermalState));
                 if ([metadata[@"low_power"] boolValue]!=NSProcessInfo.processInfo.lowPowerModeEnabled) metadata[@"power_changed"]=@YES;
                 metadata[@"thermal_end"]=@(NSProcessInfo.processInfo.thermalState);
@@ -718,6 +726,9 @@ static NSTextField *Label(NSString *text, CGFloat size, NSFontWeight weight, NSC
     NSInteger mode=self.activeMode;
     NSArray *original=[self.resultsByMode[@(mode)] copy];
     mb_context *context=self.context;
+    NSArray *settings=[self.settingsByMode[@(mode)] copy];
+    NSDictionary *snapshot=[self currentReport];
+    if ([snapshot[@"metadata"][@"complete"] boolValue] || [snapshot[@"points"] count]!=original.count) exit(1);
     for (NSInteger tab=0;tab<5;++tab) {
         fprintf(stderr,"SMOKE tab %ld\n",(long)tab);
         self.content.tabs.selectedSegment=tab;
@@ -738,7 +749,8 @@ static NSTextField *Label(NSString *text, CGFloat size, NSFontWeight weight, NSC
     NSInteger tab=mode==5?0:mode==6?1:mode==7?2:mode;
     if (tab<3) self.experiments[@(tab)]=@(mode);
     self.content.tabs.selectedSegment=tab; [self changeTab:nil];
-    if (self.selectedMode!=mode || self.content.chart.points.count!=original.count) exit(1);
+    if (self.selectedMode!=mode || self.content.chart.points.count!=original.count || ![self.settingsByMode[@(mode)] isEqual:settings]) exit(1);
+    if ([snapshot[@"metadata"][@"complete"] boolValue] || [snapshot[@"points"] count]!=original.count) exit(1);
     fprintf(stderr,"SMOKE navigation complete\n");
     if (self.navigationTest && self.smokePass==0) {
         self.content.tabs.selectedSegment=4; [self changeTab:nil];
@@ -748,6 +760,7 @@ static NSTextField *Label(NSString *text, CGFloat size, NSFontWeight weight, NSC
 }
 - (void)writeSmokeScreenshot:(NSString *)path {
     [self.content layoutSubtreeIfNeeded]; [self.content display];
+    if (self.table.tableColumns.count && NSMaxX([self.table rectOfColumn:self.table.tableColumns.count-1])>self.content.tableScroll.contentSize.width+1) { fprintf(stderr,"Table column clipped\n"); exit(1); }
     NSBitmapImageRep *bitmap=[self.content bitmapImageRepForCachingDisplayInRect:self.content.bounds];
     [self.content cacheDisplayInRect:self.content.bounds toBitmapImageRep:bitmap];
     NSData *png=[bitmap representationUsingType:NSBitmapImageFileTypePNG properties:@{}];

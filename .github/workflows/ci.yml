@@ -43,6 +43,8 @@ jobs:
           for mode in cache blocks-read navigation; do
             MB_SMOKE_MODE="$mode" MB_SMOKE_SCREENSHOT="$PWD/build/memory-lab-$mode.png" "build/Memory Benchmark.app/Contents/MacOS/MemoryBenchmark" --smoke-test
           done
+      - name: Independently verify measured JSON and CSV
+        run: python3 Tests/test_exports.py build
       - name: Package universal app
         run: ditto -c -k --sequesterRsrc --keepParent "build/Memory Benchmark.app" "build/MemoryLab-Universal.zip"
       - uses: actions/upload-artifact@v7
@@ -72,6 +74,8 @@ jobs:
           for mode in cache blocks-read navigation; do
             MB_SMOKE_MODE="$mode" MB_SMOKE_SCREENSHOT="$PWD/build/memory-lab-$mode.png" "build/Memory Benchmark.app/Contents/MacOS/MemoryBenchmark" --smoke-test
           done
+      - name: Independently verify ARM exports
+        run: python3 Tests/test_exports.py build
       - uses: actions/upload-artifact@v7
         with:
           name: Native-ARM-validation
