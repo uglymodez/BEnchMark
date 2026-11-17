@@ -5,11 +5,19 @@
 NSDictionary *MBPointRecord(mb_result r) {
     NSMutableArray *samples=[NSMutableArray array];
     for (unsigned i=0;i<r.samples;++i) [samples addObject:@(r.sample_values[i])];
-    return @{@"operation_id":@(r.operation),@"operation":@(mb_operation_name(r.operation)),
+    NSMutableDictionary *record=[@{@"operation_id":@(r.operation),@"operation":@(mb_operation_name(r.operation)),
         @"buffer_bytes":@(r.bytes),@"block_bytes":@(r.block_bytes),@"stride_bytes":@(r.stride_bytes),@"unit":@(mb_operation_unit(r.operation)),
         @"median":@(mb_result_value(&r)),@"minimum":@(mb_result_minimum(&r)),
         @"maximum":@(mb_result_maximum(&r)),@"mean":@(mb_result_mean(&r)),@"cv_percent":@(r.cv_percent),
-        @"total_sample_seconds":@(r.seconds),@"iterations":@(r.passes),@"samples":@(r.samples),@"sample_values":samples};
+        @"total_sample_seconds":@(r.seconds),@"iterations":@(r.passes),@"samples":@(r.samples),@"sample_values":samples} mutableCopy];
+    if (r.work_units_per_iteration) {
+        NSMutableArray *seconds=[NSMutableArray array], *iterations=[NSMutableArray array];
+        for (unsigned i=0;i<r.samples;++i) { [seconds addObject:@(r.sample_seconds[i])]; [iterations addObject:@(r.sample_iterations[i])]; }
+        record[@"sample_seconds"]=seconds; record[@"sample_iterations"]=iterations;
+        record[@"work_units_per_iteration"]=@(r.work_units_per_iteration);
+        record[@"work_unit"]=r.operation==MB_LATENCY?@"loads":@"bytes";
+    }
+    return record;
 }
 static BOOL Number(id n) { return [n isKindOfClass:NSNumber.class] && isfinite([n doubleValue]); }
 BOOL MBDecodePoint(id d, mb_result *out) {
@@ -54,6 +62,28 @@ BOOL MBDecodePoint(id d, mb_result *out) {
             out->block_bytes=(size_t)block; out->stride_bytes=(size_t)stride;
         }
     }
+    if (d[@"sample_seconds"] || d[@"sample_iterations"] || d[@"work_units_per_iteration"] || d[@"work_unit"]) {
+        NSArray *times=d[@"sample_seconds"], *iterations=d[@"sample_iterations"];
+        uint64_t units=out->block_bytes?((out->bytes-out->block_bytes)/out->stride_bytes+1)*out->block_bytes:op==MB_LATENCY?1:out->bytes;
+        if (![times isKindOfClass:NSArray.class] || ![iterations isKindOfClass:NSArray.class] ||
+            times.count!=(NSUInteger)count || iterations.count!=(NSUInteger)count ||
+            !Number(d[@"work_units_per_iteration"]) || [d[@"work_units_per_iteration"] doubleValue]!=(double)units ||
+            ![d[@"work_unit"] isEqual:op==MB_LATENCY?@"loads":@"bytes"]) return NO;
+        double totalSeconds=0; uint64_t totalIterations=0;
+        for (unsigned i=0;i<(unsigned)count;++i) {
+            if (!Number(times[i]) || [times[i] doubleValue]<=0 || !Number(iterations[i])) return NO;
+            double n=[iterations[i] doubleValue], seconds=[times[i] doubleValue];
+            if (n<1 || n>=0x1p64 || floor(n)!=n) return NO;
+            uint64_t passes=[iterations[i] unsignedLongLongValue];
+            if (UINT64_MAX-totalIterations<passes) return NO;
+            double rate=op==MB_LATENCY?seconds*1e9/n:(double)units*n/seconds/1e9;
+            if (!isfinite(rate) || fabs(rate-out->sample_values[i])>1e-9*fmax(1,rate)) return NO;
+            out->sample_seconds[i]=seconds; out->sample_iterations[i]=passes;
+            totalSeconds+=seconds; totalIterations+=passes;
+        }
+        if (totalIterations!=out->passes || fabs(totalSeconds-out->seconds)>1e-9*fmax(1,totalSeconds)) return NO;
+        out->work_units_per_iteration=units;
+    }
     return YES;
 }
 BOOL MBComparable(NSDictionary *a, NSDictionary *b) {
@@ -63,6 +93,8 @@ BOOL MBComparable(NSDictionary *a, NSDictionary *b) {
     if ([a[@"mode"] isEqual:@"Memory Ranges"] &&
         (![@[@"compact-5-v1",@"dense-16-v1"] containsObject:a[@"sweep"] ?: NSNull.null] || ![a[@"sweep"] isEqual:b[@"sweep"]])) return NO;
     if ((a[@"sweep"] || b[@"sweep"]) && ![a[@"sweep"] isEqual:b[@"sweep"]]) return NO;
+    if ((a[@"measurement_protocol"] || b[@"measurement_protocol"]) &&
+        ![a[@"measurement_protocol"] isEqual:b[@"measurement_protocol"]]) return NO;
     return [b[@"complete"] isEqual:@YES] && ![a[@"power_changed"] isEqual:@YES] && ![b[@"power_changed"] isEqual:@YES];
 }
 BOOL MBValidReport(id report) {
@@ -81,6 +113,12 @@ BOOL MBValidReport(id report) {
     if (maximum<4096 || maximum>1024.*1024*1024 || fmod(maximum,256)!=0 ||
         samples<1 || samples>MB_MAX_SAMPLES || floor(samples)!=samples || seconds<0.001 || seconds>1 ||
         ![meta[@"threads"] isEqual:@1] || (! [meta[@"low_power"] isEqual:@0] && ![meta[@"low_power"] isEqual:@1])) return NO;
+    if (meta[@"measurement_protocol"]) {
+        if (![meta[@"measurement_protocol"] isEqual:@"timing-audit-v1"]) return NO;
+        for (id point in points) {
+            mb_result r; if (!MBDecodePoint(point,&r) || !r.work_units_per_iteration) return NO;
+        }
+    }
     if (meta[@"power_changed"] && !Number(meta[@"power_changed"])) return NO;
     if ([meta[@"sweep"] isEqual:@"block-stride-v1"]) {
         if ((mode!=1 && mode!=2) || maximum<16384 || points.count!=4*(MB_BLOCK_STEPS+1)) return NO;
@@ -168,7 +206,9 @@ NSString *MBCSV(NSDictionary *report) {
         [csv appendFormat:@"# %@: %@\n",key,SafeComment(meta[key])];
     NSArray *summary=MBRangeSummary(report), *blocks=MBBlockSummary(report);
     if (summary.count) [csv appendString:@"# relative_speed_percent: mean / fastest mean of the same operation among the five summary buffers * 100, only after a complete sweep; blank for intermediate chart points; not cache hit rate\n"];
-    [csv appendString:@"operation,buffer_bytes,unit,median,minimum,maximum,cv_percent,total_sample_seconds,iterations,samples,sample_1,sample_2,sample_3,sample_4,sample_5,sample_6,sample_7,sample_8,sample_9,mean,relative_speed_percent,block_bytes,stride_bytes,offset_bytes,linear_reference,block_minimum,block_maximum,block_mean,linear_gb_per_second,efficiency_percent\n"];
+    [csv appendString:@"operation,buffer_bytes,unit,median,minimum,maximum,cv_percent,total_sample_seconds,iterations,samples,sample_1,sample_2,sample_3,sample_4,sample_5,sample_6,sample_7,sample_8,sample_9,mean,relative_speed_percent,block_bytes,stride_bytes,offset_bytes,linear_reference,block_minimum,block_maximum,block_mean,linear_gb_per_second,efficiency_percent,work_units_per_iteration,work_unit"];
+    for (unsigned i=1;i<=MB_MAX_SAMPLES;++i) [csv appendFormat:@",sample_%u_seconds,sample_%u_iterations",i,i];
+    [csv appendString:@"\n"];
     for (NSDictionary *point in report[@"points"]) {
         mb_result r; if (!MBDecodePoint(point,&r)) continue;
         [csv appendFormat:@"%s,%zu,%s,%.9f,%.9f,%.9f,%.6f,%.9f,%llu,%u",
@@ -190,8 +230,32 @@ NSString *MBCSV(NSDictionary *report) {
         for (NSString *key in @[@"minimum",@"maximum",@"mean",@"linear",@"efficiency_percent"]) {
             [csv appendString:@","]; if (blockRow[key]) [csv appendFormat:@"%.9f",[blockRow[key] doubleValue]];
         }
+        [csv appendString:@","]; if (r.work_units_per_iteration) [csv appendFormat:@"%llu",(unsigned long long)r.work_units_per_iteration];
+        [csv appendFormat:@",%@",r.work_units_per_iteration?(r.operation==MB_LATENCY?@"loads":@"bytes"):@""];
+        for (unsigned i=0;i<MB_MAX_SAMPLES;++i) {
+            if (r.work_units_per_iteration && i<r.samples) [csv appendFormat:@",%.17g,%llu",r.sample_seconds[i],(unsigned long long)r.sample_iterations[i]];
+            else [csv appendString:@",,"];
+        }
         [csv appendString:@"\n"];
     }
     return csv;
 }
 
+
+NSString *MBTimingDescription(NSDictionary *report) {
+    NSMutableString *text=[NSMutableString stringWithFormat:@"Исходные измерения · %@\n%@\nПрогон: %@\n\n",report[@"metadata"][@"mode"] ?: @"",report[@"metadata"][@"machine"] ?: @"",report[@"metadata"][@"run_id"] ?: @"—"];
+    [text appendString:@"Каждый повтор: полезный объём / фактически прошедшее время. Подготовка и отрисовка не входят в таймер. Внешние процессы всё равно могут влиять на результат.\n\n"];
+    for (id record in report[@"points"]) {
+        mb_result r; if (!MBDecodePoint(record,&r)) continue;
+        [text appendFormat:@"%s · буфер %zu байт",mb_operation_name(r.operation),r.bytes];
+        if (r.block_bytes) [text appendFormat:@" · блок %zu · шаг %zu%@",r.block_bytes,r.stride_bytes,r.block_bytes==r.stride_bytes?@" (линейный)":@""];
+        [text appendFormat:@"\nСреднее %.6f · медиана %.6f %s · min–max %.6f–%.6f · CV %.2f%%\n",mb_result_mean(&r),mb_result_value(&r),mb_operation_unit(r.operation),mb_result_minimum(&r),mb_result_maximum(&r),r.cv_percent];
+        if (!r.work_units_per_iteration) { [text appendString:@"В старом отчёте нет времени по отдельным повторам.\n\n"]; continue; }
+        for (unsigned i=0;i<r.samples;++i) {
+            if (r.operation==MB_LATENCY) [text appendFormat:@"%u: %.9f с × 10⁹ / %llu чтений = %.6f ns/load\n",i+1,r.sample_seconds[i],(unsigned long long)r.sample_iterations[i],r.sample_values[i]];
+            else [text appendFormat:@"%u: %llu байт × %llu проходов / %.9f с / 10⁹ = %.6f GB/s\n",i+1,(unsigned long long)r.work_units_per_iteration,(unsigned long long)r.sample_iterations[i],r.sample_seconds[i],r.sample_values[i]];
+        }
+        [text appendString:@"\n"];
+    }
+    return text;
+}

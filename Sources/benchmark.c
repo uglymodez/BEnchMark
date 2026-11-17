@@ -349,6 +349,7 @@ mb_status mb_measure(mb_context *ctx, mb_operation op, size_t n,
         }
         rates[s] = op == MB_LATENCY ? elapsed * 1e9 / (double)passes :
                    ((double)n * (double)passes) / elapsed / 1e9;
+        out->sample_seconds[s]=elapsed; out->sample_iterations[s]=passes;
         elapsed_total += elapsed; total += passes;
     }
     ctx->sink ^= cursor;
@@ -356,6 +357,7 @@ mb_status mb_measure(mb_context *ctx, mb_operation op, size_t n,
     if (!mb_summarize(rates, count, &stats)) {
         problem(ctx, "Invalid sample statistics."); return MB_ERROR;
     }
+    out->work_units_per_iteration=op==MB_LATENCY?1:n;
     out->bytes=n; out->operation=op; out->seconds=elapsed_total;
     out->passes=total; out->samples=count; out->cv_percent=stats.cv_percent;
     memcpy(out->sample_values, rates, count * sizeof(double));
@@ -412,20 +414,24 @@ mb_status mb_measure_blocks(mb_context *ctx, mb_operation op, size_t n,
     ctx->sink^=block_pass(ctx->data,n,block,stride,op==MB_WRITE);
     if (op==MB_WRITE) finish_stores();
     size_t useful=((n-block)/stride+1)*block;
+    size_t batch=(1024*1024)/useful; if (batch<1) batch=1;
     double values[MB_MAX_SAMPLES],seconds=0; uint64_t total=0;
     for (unsigned s=0;s<count;++s) {
         double start=now(),elapsed; uint64_t passes=0;
         do {
             if (mb_is_cancelled(ctx)) return MB_CANCELLED;
-            ctx->sink^=block_pass(ctx->data,n,block,stride,op==MB_WRITE); ++passes;
+            for (size_t k=0;k<batch;++k) ctx->sink^=block_pass(ctx->data,n,block,stride,op==MB_WRITE);
+            passes+=batch;
             if (op==MB_WRITE) finish_stores();
             elapsed=now()-start;
         } while (elapsed<duration);
+        out->sample_seconds[s]=elapsed; out->sample_iterations[s]=passes;
         values[s]=(double)useful*passes/elapsed/1e9; seconds+=elapsed; total+=passes;
     }
     if (mb_is_cancelled(ctx)) return MB_CANCELLED;
     mb_statistics stats;
     if (!mb_summarize(values,count,&stats)) { problem(ctx,"Invalid block statistics."); return MB_ERROR; }
+    out->work_units_per_iteration=useful;
     out->bytes=n; out->block_bytes=block; out->stride_bytes=stride; out->operation=op;
     out->samples=count; out->seconds=seconds; out->passes=total;
     out->gb_per_second=stats.median; out->minimum_gb_per_second=stats.minimum;

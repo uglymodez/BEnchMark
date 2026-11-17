@@ -63,7 +63,7 @@ int main(void) {
         NSUInteger row=0;
         for (NSString *line in lines) if ([line hasPrefix:@"read,"] || [line hasPrefix:@"write,"]) {
             NSArray *fields=[line componentsSeparatedByString:@","];
-            assert(fields.count==30);
+            assert(fields.count==50);
             NSString *op=fields[0]; NSDictionary *value=summary[row/2][op];
             assert(fabs([fields[19] doubleValue]-[value[@"mean"] doubleValue])<1e-8);
             assert(fabs([fields[20] doubleValue]-[value[@"relative_speed_percent"] doubleValue])<1e-5);
@@ -79,7 +79,7 @@ int main(void) {
         assert(MBDecodePoint(forged,&restored) && mb_result_mean(&restored)==4);
         rangeMeta[@"complete"]=@NO; assert(!MBValidReport(ranges));
         for (NSDictionary *entry in MBRangeSummary(ranges)) assert(!entry[@"read"][@"relative_speed_percent"]);
-        assert([MBCSV(ranges) containsString:@",4.000000000,,0,0,,false,,,,,\n"]);
+        assert([MBCSV(ranges) containsString:@",4.000000000,,0,0,,false,"]);
         rangeMeta[@"complete"]=@YES;
         ranges[@"points"]=[rangePoints subarrayWithRange:NSMakeRange(0,9)]; assert(!MBValidReport(ranges));
         for (NSDictionary *entry in MBRangeSummary(ranges)) assert(!entry[@"write"][@"relative_speed_percent"]);
@@ -110,7 +110,7 @@ int main(void) {
         NSUInteger csvCount=0, percentCount=0;
         for (NSString *line in [MBCSV(ranges) componentsSeparatedByString:@"\n"]) if ([line hasPrefix:@"read,"] || [line hasPrefix:@"write,"]) {
             NSArray *fields=[line componentsSeparatedByString:@","];
-            assert(fields.count==30); ++csvCount;
+            assert(fields.count==50); ++csvCount;
             if ([fields[20] length]) ++percentCount;
             else assert([fields[19] doubleValue]==1000);
         }
@@ -150,6 +150,25 @@ int main(void) {
         assert(!MBComparable(blockMeta,legacy) && !MBComparable(legacy,blockMeta));
         NSMutableDictionary *invalid=[blockPoints[1] mutableCopy]; invalid[@"stride_bytes"]=@1001;
         assert(!MBDecodePoint(invalid,&restored));
+        // Real clock/counter evidence survives JSON, and tampering is rejected.
+        assert(MBDecodePoint(point,&restored) && restored.work_units_per_iteration==1);
+        assert(restored.sample_seconds[0]>0 && restored.sample_iterations[0]>0);
+        NSMutableDictionary *auditMeta=[meta mutableCopy]; auditMeta[@"measurement_protocol"]=@"timing-audit-v1";
+        NSDictionary *auditReport=@{@"schema_version":@2,@"metadata":auditMeta,@"points":@[point]};
+        assert(MBValidReport(auditReport)); assert(!MBComparable(auditMeta,meta));
+        assert([MBTimingDescription(auditReport) containsString:@"ns/load"]);
+        NSMutableDictionary *tampered=[point mutableCopy];
+        NSMutableArray *times=[point[@"sample_seconds"] mutableCopy]; times[0]=@([times[0] doubleValue]*2);
+        tampered[@"sample_seconds"]=times; assert(!MBDecodePoint(tampered,&restored));
+        tampered=[point mutableCopy]; tampered[@"work_units_per_iteration"]=@2; assert(!MBDecodePoint(tampered,&restored));
+        tampered=[point mutableCopy]; tampered[@"iterations"]=@([point[@"iterations"] unsignedLongLongValue]+1); assert(!MBDecodePoint(tampered,&restored));
+        tampered=[point mutableCopy];
+        for (NSString *key in @[@"sample_seconds",@"sample_iterations",@"work_units_per_iteration",@"work_unit"]) [tampered removeObjectForKey:key];
+        assert(MBDecodePoint(tampered,&restored)); // legacy point still readable, not an audited report
+        assert(!MBValidReport(@{@"schema_version":@2,@"metadata":auditMeta,@"points":@[tampered]}));
+        assert(mb_measure_blocks(ctx,MB_READ,65536,64,4096,.001,3,&r)==MB_OK);
+        NSDictionary *blockAudit=MBPointRecord(r); assert(MBDecodePoint(blockAudit,&restored));
+        assert(restored.work_units_per_iteration==1024);
         mb_destroy(ctx); puts("PASS: JSON round trip, malformed reports, comparison compatibility, CSV units");
     }
 }

@@ -89,7 +89,7 @@ static NSTextField *Label(NSString *text, CGFloat size, NSFontWeight weight, NSC
 @property NSMutableArray<MBPoint *> *points;
 @property NSArray<MBPoint *> *baseline;
 @property NSInteger mode;
-@property size_t maximum, selectedBytes;
+@property size_t maximum, selectedBytes, pinnedBytes;
 @property NSTrackingArea *tracking;
 @end
 @implementation MBChart
@@ -119,7 +119,8 @@ static NSTextField *Label(NSString *text, CGFloat size, NSFontWeight weight, NSC
     }
     [self setNeedsDisplay:YES];
 }
-- (void)mouseExited:(NSEvent *)event { (void)event; self.selectedBytes=0; [self setNeedsDisplay:YES]; }
+- (void)mouseDown:(NSEvent *)event { [self mouseMoved:event]; self.pinnedBytes=self.selectedBytes; }
+- (void)mouseExited:(NSEvent *)event { (void)event; self.selectedBytes=self.pinnedBytes; [self setNeedsDisplay:YES]; }
 - (void)text:(NSString *)s at:(NSPoint)p color:(NSColor *)color size:(CGFloat)size {
     [s drawAtPoint:p withAttributes:@{NSFontAttributeName:[NSFont monospacedSystemFontOfSize:size weight:NSFontWeightRegular],NSForegroundColorAttributeName:color}];
 }
@@ -134,7 +135,7 @@ static NSTextField *Label(NSString *text, CGFloat size, NSFontWeight weight, NSC
     NSArray<NSColor *> *colors=@[NSColor.systemBlueColor,NSColor.cyanColor,NSColor.greenColor,NSColor.yellowColor];
     double high=1;
     for (NSArray *series in @[self.points,self.baseline ?: @[]]) for (MBPoint *p in series)
-        { mb_result r=p.result; if (r.stride_bytes!=r.block_bytes) high=fmax(high,mb_result_mean(&r)*1000*1.1); }
+        { mb_result r=p.result; if (r.stride_bytes!=r.block_bytes) high=fmax(high,mb_result_maximum(&r)*1000*1.1); }
     for (int j=0;j<=10;++j) {
         CGFloat y=NSMaxY(plot)-plot.size.height*j/10;
         NSBezierPath *path=[NSBezierPath bezierPath]; [path moveToPoint:NSMakePoint(plot.origin.x,y)]; [path lineToPoint:NSMakePoint(NSMaxX(plot),y)];
@@ -145,14 +146,12 @@ static NSTextField *Label(NSString *text, CGFloat size, NSFontWeight weight, NSC
         CGFloat x=plot.origin.x+plot.size.width*i/40;
         NSBezierPath *path=[NSBezierPath bezierPath]; [path moveToPoint:NSMakePoint(x,plot.origin.y)]; [path lineToPoint:NSMakePoint(x,NSMaxY(plot))];
         [grid setStroke]; path.lineWidth=.5; [path stroke];
-        if (i%4==0) [self text:[NSString stringWithFormat:@"%+d",i/4-3] at:NSMakePoint(x-8,NSMaxY(plot)+9) color:NSColor.lightGrayColor size:11];
+        if (i%4==0) [self text:[NSString stringWithFormat:@"%d",i/4+1] at:NSMakePoint(x-8,NSMaxY(plot)+9) color:NSColor.lightGrayColor size:11];
     }
-    CGFloat zeroX=plot.origin.x+plot.size.width*12/40;
-    NSBezierPath *zero=[NSBezierPath bezierPath]; [zero moveToPoint:NSMakePoint(zeroX,plot.origin.y)]; [zero lineToPoint:NSMakePoint(zeroX,NSMaxY(plot))];
-    CGFloat dash[]={3,4}; [zero setLineDash:dash count:2 phase:0]; [NSColor.whiteColor setStroke]; [zero stroke];
+    CGFloat dash[]={3,4};
     [self text:self.mode==1?@"ЧТЕНИЕ БЛОКА":@"ЗАПИСЬ БЛОКА" at:NSMakePoint(18,16) color:NSColor.whiteColor size:12];
     [self text:@"MB/s" at:NSMakePoint(8,57) color:NSColor.lightGrayColor size:10];
-    [self text:@"ШАГ ДОСТУПА − 4 KiB · ОСЬ X В KiB" at:NSMakePoint(w-295,h-17) color:NSColor.lightGrayColor size:10];
+    [self text:@"ФАКТИЧЕСКИЙ ШАГ ДОСТУПА · KiB" at:NSMakePoint(w-295,h-17) color:NSColor.lightGrayColor size:10];
     NSMutableArray *hover=[NSMutableArray array];
     for (NSUInteger b=0;b<4;++b) {
         size_t block=32UL<<b; NSColor *color=colors[b];
@@ -165,13 +164,21 @@ static NSTextField *Label(NSString *text, CGFloat size, NSFontWeight weight, NSC
                 double mean=mb_result_mean(&r)*1000;
                 NSPoint point=NSMakePoint(plot.origin.x+plot.size.width*(r.stride_bytes-1024)/10240.,NSMaxY(plot)-plot.size.height*mean/high);
                 if (first) { [path moveToPoint:point]; first=NO; } else [path lineToPoint:point];
+                if (pass) {
+                    CGFloat top=NSMaxY(plot)-plot.size.height*r.maximum_gb_per_second*1000/high;
+                    CGFloat bottom=NSMaxY(plot)-plot.size.height*r.minimum_gb_per_second*1000/high;
+                    NSBezierPath *whisker=[NSBezierPath bezierPath]; [whisker moveToPoint:NSMakePoint(point.x,top)]; [whisker lineToPoint:NSMakePoint(point.x,bottom)];
+                    [[color colorWithAlphaComponent:.3] setStroke]; whisker.lineWidth=.7; [whisker stroke];
+                    [(r.cv_percent>5?NSColor.orangeColor:color) setStroke];
+                    [[NSBezierPath bezierPathWithOvalInRect:NSMakeRect(point.x-2,point.y-2,4,4)] stroke];
+                }
                 if (pass && self.selectedBytes==r.stride_bytes) [hover addObject:[NSString stringWithFormat:@"%zu Б: %.0f",block,mean]];
             }
             if (!pass) [path setLineDash:dash count:2 phase:0];
             [[color colorWithAlphaComponent:pass?1:.4] setStroke]; path.lineWidth=pass?1.8:1; [path stroke];
         }
     }
-    NSString *detail=self.selectedBytes?[NSString stringWithFormat:@"Шаг %zu Б · %@ MB/s",self.selectedBytes,[hover componentsJoinedByString:@" / "]]:@"4 размера блока · среднее по повторам · пунктир — сохранённый эталон";
+    NSString *detail=self.selectedBytes?[NSString stringWithFormat:@"Шаг %zu Б · %@ MB/s",self.selectedBytes,[hover componentsJoinedByString:@" / "]]:@"Точки — замеры · штрихи — min–max · оранжевый ободок — CV > 5% · без сглаживания";
     [self text:detail at:NSMakePoint(18,40) color:NSColor.lightGrayColor size:10];
     if (!self.points.count) [self text:@"Начни тест для сравнения блоков 32 / 64 / 128 / 256 байт" at:NSMakePoint(90,h/2) color:NSColor.lightGrayColor size:12];
 }
@@ -232,7 +239,7 @@ static NSTextField *Label(NSString *text, CGFloat size, NSFontWeight weight, NSC
                 mb_result r=p.result; if (r.operation!=(mb_operation)op) continue;
                 NSPoint point=[self position:r value:(self.mode==0?mb_result_mean(&r):mb_result_value(&r)) plot:plot high:high];
                 if (first) { [path moveToPoint:point]; first=NO; } else [path lineToPoint:point];
-                if (pass && (self.mode!=0 || self.selectedBytes==r.bytes)) { [color setFill]; [[NSBezierPath bezierPathWithOvalInRect:NSMakeRect(point.x-2,point.y-2,4,4)] fill]; }
+                if (pass) { [(r.cv_percent>5?NSColor.orangeColor:color) setFill]; [[NSBezierPath bezierPathWithOvalInRect:NSMakeRect(point.x-1.5,point.y-1.5,3,3)] fill]; }
             }
             [path stroke];
         }
@@ -246,7 +253,7 @@ static NSTextField *Label(NSString *text, CGFloat size, NSFontWeight weight, NSC
             [OperationColor(r.operation) setStroke]; NSBezierPath *ring=[NSBezierPath bezierPathWithOvalInRect:NSMakeRect(point.x-5,point.y-5,10,10)]; [ring stroke];
         }
         [self text:[details componentsJoinedByString:@"  /  "] at:NSMakePoint(20,40) color:NSColor.whiteColor size:11];
-    } else [self text:@"Наведи на график или выбери строку таблицы для точного значения" at:NSMakePoint(20,40) color:muted size:10];
+    } else [self text:@"Точки — замеры · без сглаживания · щёлкни точку → «Исходные замеры»" at:NSMakePoint(20,40) color:muted size:10];
     if (!self.points.count) {
         [self text:@"Начни тест, чтобы увидеть профиль памяти своего Mac" at:NSMakePoint(MAX(70,(w-455)/2),h/2) color:muted size:13];
     }
@@ -257,7 +264,7 @@ static NSTextField *Label(NSString *text, CGFloat size, NSFontWeight weight, NSC
 @property NSTextField *titleLabel, *machineLabel, *cacheLabel, *rangeLabel, *profileLabel, *statusLabel, *noteLabel, *conditionLabel;
 @property NSSegmentedControl *tabs;
 @property NSPopUpButton *maximumPopup, *profilePopup;
-@property NSButton *startButton, *exportButton, *jsonButton, *baselineButton;
+@property NSButton *startButton, *exportButton, *jsonButton, *baselineButton, *auditButton, *baselineToggle;
 @property NSProgressIndicator *progress;
 @property MBChart *chart;
 @property NSScrollView *tableScroll, *aboutScroll;
@@ -287,6 +294,8 @@ static NSTextField *Label(NSString *text, CGFloat size, NSFontWeight weight, NSC
     self.startButton.frame=NSMakeRect(w-178,h-47,154,30);
     self.baselineButton.frame=NSMakeRect(gap,h-47,192,30);
     self.exportButton.frame=NSMakeRect(gap+204,h-47,120,30);
+    self.auditButton.frame=NSMakeRect(gap+468,h-47,175,30);
+    self.baselineToggle.frame=NSMakeRect(gap+650,h-44,140,24);
     self.jsonButton.frame=NSMakeRect(gap+336,h-47,120,30);
     self.progress.frame=NSMakeRect(gap,h-12,w-2*gap,4);
     self.statusLabel.frame=NSMakeRect(gap,h-72,w-2*gap,20);
@@ -298,7 +307,7 @@ static NSTextField *Label(NSString *text, CGFloat size, NSFontWeight weight, NSC
 @end
 
 @interface MBApp : NSObject <NSApplicationDelegate,NSTableViewDataSource,NSTableViewDelegate>
-@property NSWindow *window;
+@property NSWindow *window, *auditWindow;
 @property MBContent *content;
 @property NSTableView *table;
 @property NSArray<NSDictionary *> *rangeRows, *blockRows;
@@ -328,7 +337,7 @@ static NSTextField *Label(NSString *text, CGFloat size, NSFontWeight weight, NSC
     self.content.autoresizingMask=NSViewWidthSizable|NSViewHeightSizable;
     self.window.contentView=self.content; MBContent *v=self.content;
     NSColor *dark=NSColor.labelColor, *muted=[NSColor secondaryLabelColor];
-    v.titleLabel=Label(@"Memory Lab  /  2.3",27,NSFontWeightSemibold,dark);
+    v.titleLabel=Label(@"Memory Lab  /  2.4",27,NSFontWeightSemibold,dark);
     NSString *cpu=SysString("machdep.cpu.brand_string"); if (!cpu.length) cpu=SysString("hw.model");
     NSString *translation=SysNumber("sysctl.proc_translated")?@" · Rosetta: пересобери под arm64":@" · native";
     v.machineLabel=Label([NSString stringWithFormat:@"%@  ·  %@ RAM  ·  %@%@  ·  macOS %@",cpu,SizeLabel(NSProcessInfo.processInfo.physicalMemory),[NSString stringWithUTF8String:mb_architecture()],translation,NSProcessInfo.processInfo.operatingSystemVersionString],12,NSFontWeightMedium,dark);
@@ -365,15 +374,19 @@ static NSTextField *Label(NSString *text, CGFloat size, NSFontWeight weight, NSC
     v.exportButton=[NSButton buttonWithTitle:@"Экспорт CSV" target:self action:@selector(exportCSV:)]; v.exportButton.bezelStyle=NSBezelStyleRounded; v.exportButton.enabled=NO;
     v.jsonButton=[NSButton buttonWithTitle:@"Экспорт JSON" target:self action:@selector(exportJSON:)]; v.jsonButton.bezelStyle=NSBezelStyleRounded; v.jsonButton.enabled=NO;
     v.baselineButton=[NSButton buttonWithTitle:@"Сохранить как эталон" target:self action:@selector(saveBaseline:)]; v.baselineButton.bezelStyle=NSBezelStyleRounded; v.baselineButton.enabled=NO;
+    v.auditButton=[NSButton buttonWithTitle:@"Исходные замеры" target:self action:@selector(showAudit:)]; v.auditButton.bezelStyle=NSBezelStyleRounded; v.auditButton.enabled=NO;
+    v.auditButton.toolTip=@"Щёлкни точку графика, затем открой время и число проходов каждого повтора. Без выбора показана последняя точка.";
+    v.baselineToggle=[NSButton checkboxWithTitle:@"Показать эталон" target:self action:@selector(toggleBaseline:)];
+    v.baselineToggle.state=NSControlStateValueOff;
     v.baselineButton.toolTip=@"Сохранить завершённый прогон этой вкладки для сравнения. Эталон остаётся после перезапуска приложения.";
     v.conditionLabel=Label(@"",11,NSFontWeightMedium,muted);
     v.aboutScroll=[[NSScrollView alloc] initWithFrame:NSZeroRect]; v.aboutScroll.hasVerticalScroller=YES;
     NSTextView *about=[[NSTextView alloc] initWithFrame:NSMakeRect(0,0,960,650)]; about.editable=NO; about.selectable=YES;
     about.font=[NSFont systemFontOfSize:14]; about.backgroundColor=self.window.backgroundColor;
     about.textContainerInset=NSMakeSize(12,12); about.autoresizingMask=NSViewWidthSizable; about.textContainer.widthTracksTextView=YES;
-    about.string=@"Memory Lab · 2.3\n\nПять диапазонов\nПодробный график: 16 интервалов на удвоение размера, 225–289 размеров буфера. Пять строк таблицы: 4 KiB, 64 KiB, 1 MiB, 16 MiB и выбранный максимум (64 MiB – 1 GiB). Это опорные размеры рабочего набора, а не пять физических уровней кэша. Чтение и запись измеряются отдельно в одном потоке. На графике все промежуточные замеры; линии соединяют соседние значения без сглаживания или искусственных ступеней. Форма зависит от Mac, нагрузки и режима питания. График показывает среднее арифметическое, полоса — минимум и максимум повторов. Все скорости — GB/s (10⁹ байт/с).\n\nОтносительная скорость\nСредняя скорость / самая высокая средняя скорость этой же операции среди пяти строк таблицы в завершённом прогоне × 100%. Для чтения и записи свой максимум. 100% — самый быстрый диапазон; это не доля попаданий в кэш и не процент от теоретической скорости процессора. При остановке теста проценты не рассчитываются.\n\nДругие режимы\nRead RAM и Write RAM: четыре блока 32/64/128/256 байт. В фиксированном буфере меняется шаг между началами блоков: 1–11 KiB, 41 значение. Ось X — шаг минус 4 KiB; отрицательные значения не означают отрицательные адреса. Считаются только полезные байты, не пропуски. Таблица: min/max повторов всех шагов, среднее средних по 41 шагу, отдельный линейный проход с шагом равным блоку. Эффективность = среднее / линейный × 100%, может превышать 100%. Это наша описанная методика, не восстановленный алгоритм старой программы. Latency измеряет зависимые случайные чтения, один узел на 128 байт; ns/load, меньше — лучше. В Latency график показывает медиану и min–max; в Read/Write RAM — средние. Это не чистая задержка DRAM. Тест NOP-кода остаётся доступен через CLI.\n\nМетодика MBM-2.0\nБуфер выделяется, заполняется и прогревается до замера. Быстрый: 15 мс × 3; баланс: 35 мс × 5; точный: 60 мс × 9 на операцию и размер. Подробный тест занимает примерно от 20 секунд до 5 минут только на измерения, плюс прогрев и подготовка. CV — стандартное отклонение / среднее × 100%, описательный разброс. macOS выбирает ядро; приложение не закрепляет поток за P-ядром. Размеры кэша вверху — сведения macOS.\n\nЭталон и экспорт\nСохрани завершённый прогон и повтори тест с теми же настройками: пунктир покажет эталон. В пяти диапазонах пунктир также показывает средние, а проценты таблицы сравнивают диапазоны текущего прогона. В Latency таблица показывает изменение к эталону. В Read/Write RAM пунктир — эталон, эффективность относится к линейному замеру текущего прогона. Эталоны Cache Speed и редкого прогона 2.1 несовместимы с подробным графиком 2.2. CSV и JSON сохраняют исходные повторы, статистики и относительные скорости; JSON также содержит сводку пяти диапазонов. Незавершённый прогон можно экспортировать, но нельзя сохранить как эталон.\n\nУсловия и ограничения\nФоновые задачи, нагрев и энергосбережение влияют на результаты. CV > 5% — повод повторить тест. Это не проверка исправности памяти, не многопоточный максимум и не тест GPU. Лимит буфера — 1 GiB и ⅛ RAM. Результаты остаются на устройстве.\n\nПодробности: README.md и VALIDATION.md.\n";
+    about.string=@"Memory Lab · 2.4\n\nПять диапазонов\nПодробный график: 16 интервалов на удвоение размера, 225–289 размеров буфера. Пять строк таблицы: 4 KiB, 64 KiB, 1 MiB, 16 MiB и выбранный максимум (64 MiB – 1 GiB). Это опорные размеры рабочего набора, а не пять физических уровней кэша. Чтение и запись измеряются отдельно в одном потоке. На графике все промежуточные замеры; линии соединяют соседние значения без сглаживания или искусственных ступеней. Форма зависит от Mac, нагрузки и режима питания. График показывает среднее арифметическое, полоса — минимум и максимум повторов. Все скорости — GB/s (10⁹ байт/с).\n\nОтносительная скорость\nСредняя скорость / самая высокая средняя скорость этой же операции среди пяти строк таблицы в завершённом прогоне × 100%. Для чтения и записи свой максимум. 100% — самый быстрый диапазон; это не доля попаданий в кэш и не процент от теоретической скорости процессора. При остановке теста проценты не рассчитываются.\n\nДругие режимы\nRead RAM и Write RAM: четыре блока 32/64/128/256 байт. В фиксированном буфере меняется шаг между началами блоков: 1–11 KiB, 41 значение. Ось X — фактический шаг 1–11 KiB. Каждая точка — среднее реальных повторов; вертикальный штрих — min–max, оранжевая отметка — CV > 5%. Считаются только полезные байты, не пропуски. Таблица: min/max повторов всех шагов, среднее средних по 41 шагу, отдельный линейный проход с шагом равным блоку. Эффективность = среднее / линейный × 100%, может превышать 100%. Это наша описанная методика, не восстановленный алгоритм старой программы. Latency измеряет зависимые случайные чтения, один узел на 128 байт; ns/load, меньше — лучше. В Latency график показывает медиану и min–max; в Read/Write RAM — средние. Это не чистая задержка DRAM. Тест NOP-кода остаётся доступен через CLI.\n\nМетодика MBM-2.0\nБуфер выделяется, заполняется и прогревается до замера. Быстрый: 15 мс × 3; баланс: 35 мс × 5; точный: 60 мс × 9 на операцию и размер. Подробный тест занимает примерно от 20 секунд до 5 минут только на измерения, плюс прогрев и подготовка. CV — стандартное отклонение / среднее × 100%, описательный разброс. macOS выбирает ядро; приложение не закрепляет поток за P-ядром. Размеры кэша вверху — сведения macOS.\n\nЭталон и экспорт\nСохрани завершённый прогон и повтори тест с теми же настройками: пунктир покажет эталон. В пяти диапазонах пунктир также показывает средние, а проценты таблицы сравнивают диапазоны текущего прогона. В Latency таблица показывает изменение к эталону. В Read/Write RAM пунктир — эталон, эффективность относится к линейному замеру текущего прогона. Эталоны Cache Speed и редкого прогона 2.1 несовместимы с подробным графиком 2.2. CSV и JSON сохраняют исходные повторы, статистики и относительные скорости; JSON также содержит сводку пяти диапазонов. Незавершённый прогон можно экспортировать, но нельзя сохранить как эталон.\n\nУсловия и ограничения\nФоновые задачи, нагрев и энергосбережение влияют на результаты. CV > 5% — повод повторить тест. Это не проверка исправности памяти, не многопоточный максимум и не тест GPU. Лимит буфера — 1 GiB и ⅛ RAM. Результаты остаются на устройстве.\n\nПроверка происхождения данных\nЩёлкни точку графика → «Исходные замеры»: время, число проходов и расчёт скорости каждого повтора. Те же данные записываются в JSON/CSV; при загрузке формула проверяется. Перерисовка завершается между точками, до следующего таймера. Эталон скрыт по умолчанию и включается явно. Внешние процессы, планировщик и нагрев остаются источниками разброса. Это скорость подсистемы памяти при данной нагрузке, а не общая мощность Mac.\n\nПодробности: README.md и VALIDATION.md.\n";
     v.aboutScroll.documentView=about;
-    for (NSView *view in @[v.titleLabel,v.machineLabel,v.cacheLabel,v.tabs,v.rangeLabel,v.maximumPopup,v.profileLabel,v.profilePopup,v.chart,v.tableScroll,v.noteLabel,v.statusLabel,v.progress,v.startButton,v.exportButton,v.jsonButton,v.baselineButton,v.conditionLabel,v.aboutScroll]) [v addSubview:view];
+    for (NSView *view in @[v.titleLabel,v.machineLabel,v.cacheLabel,v.tabs,v.rangeLabel,v.maximumPopup,v.profileLabel,v.profilePopup,v.chart,v.tableScroll,v.noteLabel,v.statusLabel,v.progress,v.startButton,v.exportButton,v.jsonButton,v.baselineButton,v.auditButton,v.baselineToggle,v.conditionLabel,v.aboutScroll]) [v addSubview:view];
     self.baselines=[NSMutableDictionary dictionary]; [self loadBaselines];
     self.conditionTimer=[NSTimer scheduledTimerWithTimeInterval:1 target:self selector:@selector(updateConditions:) userInfo:nil repeats:YES];
     [self updateConditions:nil]; [self refreshResults];
@@ -427,7 +440,7 @@ static NSTextField *Label(NSString *text, CGFloat size, NSFontWeight weight, NSC
         self.selectedMode=mode; self.points=(self.running && mode==self.runningMode)?(NSMutableArray *)self.resultsByMode[@(mode)]:([self.resultsByMode[@(mode)] mutableCopy] ?: [NSMutableArray array]);
         self.rangeRows=@[]; self.blockRows=@[];
         [self configureTable];
-        self.content.chart.points=self.points; self.content.chart.mode=mode; self.content.chart.selectedBytes=0;
+        self.content.chart.points=self.points; self.content.chart.mode=mode; self.content.chart.selectedBytes=0; self.content.chart.pinnedBytes=0;
         NSDictionary *meta=self.metadataByMode[@(mode)];
         self.content.chart.maximum=meta?[meta[@"maximum_bytes"] unsignedLongLongValue]:256*1024*1024;
         self.content.statusLabel.stringValue=meta?[NSString stringWithFormat:@"%@ · %@",meta[@"state"],meta[@"started"]]:@"Готов к тесту";
@@ -435,7 +448,8 @@ static NSTextField *Label(NSString *text, CGFloat size, NSFontWeight weight, NSC
     }
     self.content.exportButton.enabled=!self.running && mode!=4 && self.points.count>0;
     self.content.jsonButton.enabled=self.content.exportButton.enabled;
-    if (mode==4) self.content.baselineButton.enabled=NO;
+    self.content.auditButton.enabled=self.content.exportButton.enabled;
+    if (mode==4) { self.content.baselineButton.enabled=NO; self.content.auditButton.enabled=NO; }
     if (self.running) self.content.statusLabel.stringValue=[NSString stringWithFormat:@"Выполняется %@ · можно смотреть вкладки; «Стоп» остановит тест",@[@"5 диапазонов",@"Read RAM",@"Write RAM",@"Latency"][self.runningMode]];
     [self.content setNeedsLayout:YES];
 }
@@ -493,7 +507,7 @@ static NSTextField *Label(NSString *text, CGFloat size, NSFontWeight weight, NSC
     NSData *data=[NSJSONSerialization dataWithJSONObject:report options:NSJSONWritingPrettyPrinted|NSJSONWritingSortedKeys error:&error];
     if (!data || ![NSFileManager.defaultManager createDirectoryAtURL:url.URLByDeletingLastPathComponent withIntermediateDirectories:YES attributes:nil error:&error] ||
         ![data writeToURL:url options:NSDataWritingAtomic error:&error]) { [self showError:error.localizedDescription ?: @"Не удалось сохранить эталон."]; return; }
-    self.baselines[@(self.selectedMode)]=report; [self refreshResults];
+    self.baselines[@(self.selectedMode)]=report; self.content.baselineToggle.state=NSControlStateValueOn; [self refreshResults];
     self.content.statusLabel.stringValue=@"Эталон сохранён · повтори тест с теми же настройками";
 }
 - (void)updateConditions:(NSTimer *)timer {
@@ -517,7 +531,7 @@ static NSTextField *Label(NSString *text, CGFloat size, NSFontWeight weight, NSC
         if (![report[@"metadata"] count]) report=@{@"metadata":@{@"mode":@"Memory Ranges",@"maximum_bytes":@(self.content.chart.maximum)},@"points":@[]};
         self.rangeRows=MBRangeSummary(report);
     }
-    self.content.chart.baseline=[self comparableBaseline];
+    self.content.chart.baseline=self.content.baselineToggle.state==NSControlStateValueOn?[self comparableBaseline]:@[];
     [self.content.chart setNeedsDisplay:YES]; [self.table reloadData];
     MBPoint *primary=nil;
     mb_operation operation=self.selectedMode==2?MB_WRITE:self.selectedMode==3?MB_LATENCY:MB_READ;
@@ -543,7 +557,7 @@ static NSTextField *Label(NSString *text, CGFloat size, NSFontWeight weight, NSC
     }
     if (self.selectedMode==1 || self.selectedMode==2) {
         self.content.stats[0].stringValue=@"32 / 64 / 128 / 256 байт\nЧетыре серии, один поток";
-        self.content.stats[1].stringValue=@"Шаг 1–11 KiB\nНоль на графике = шаг 4 KiB";
+        self.content.stats[1].stringValue=@"Фактический шаг 1–11 KiB\nТочки и разброс реальных замеров";
         self.content.stats[2].stringValue=@"Эффект. = среднее / линейн.\nОтдельный последовательный замер";
     }
     for (NSTextField *label in self.content.stats) label.font=[NSFont systemFontOfSize:13 weight:NSFontWeightMedium];
@@ -557,6 +571,7 @@ static NSTextField *Label(NSString *text, CGFloat size, NSFontWeight weight, NSC
     self.content.noteLabel.toolTip=self.content.noteLabel.stringValue;
     self.content.exportButton.enabled=!self.running && !self.content.showingAbout && self.points.count>0;
     self.content.jsonButton.enabled=self.content.exportButton.enabled;
+    self.content.auditButton.enabled=self.content.exportButton.enabled;
     self.content.baselineButton.enabled=!self.running && !self.content.showingAbout && [meta[@"complete"] boolValue] && self.points.count>0;
 }
 - (void)startOrStop:(id)sender {
@@ -570,12 +585,14 @@ static NSTextField *Label(NSString *text, CGFloat size, NSFontWeight weight, NSC
     self.context=ctx; self.running=YES; self.runningMode=self.selectedMode;
     self.points=[NSMutableArray array]; self.content.chart.points=self.points; self.content.chart.maximum=maximum;
     self.content.startButton.title=@"Стоп"; self.content.tabs.enabled=YES; self.content.maximumPopup.enabled=NO; self.content.profilePopup.enabled=NO; self.content.exportButton.enabled=NO; self.content.jsonButton.enabled=NO; self.content.baselineButton.enabled=NO;
-    self.content.progress.doubleValue=0;
+    self.content.progress.doubleValue=0; self.content.auditButton.enabled=NO; self.content.chart.selectedBytes=0; self.content.chart.pinnedBytes=0;
     NSInteger mode=self.selectedMode, profile=self.content.profilePopup.indexOfSelectedItem;
     const double durations[]={0.015,0.035,0.060}; const unsigned sampleCounts[]={3,5,9};
     double seconds=durations[profile]; unsigned samples=sampleCounts[profile];
     NSString *started=[NSISO8601DateFormatter.new stringFromDate:NSDate.date];
     NSMutableDictionary *metadata=[@{@"method":@(mb_method_version()),@"machine":self.content.machineLabel.stringValue,@"caches":self.content.cacheLabel.stringValue,@"started":started,@"mode":@[@"Memory Ranges",@"Read RAM",@"Write RAM",@"Latency"][mode],@"maximum_bytes":@(maximum),@"seconds_per_sample":@(seconds),@"samples":@(samples),@"threads":@1,@"state":@"Выполняется",@"low_power":@(NSProcessInfo.processInfo.lowPowerModeEnabled),@"thermal_start":@(NSProcessInfo.processInfo.thermalState),@"thermal_peak":@(NSProcessInfo.processInfo.thermalState),@"complete":@NO,@"profile":@[@"quick",@"standard",@"precise"][profile],@"latency_stride_bytes":@(MB_LATENCY_STRIDE),@"order":@"ascending"} mutableCopy];
+    metadata[@"measurement_protocol"]=@"timing-audit-v1"; metadata[@"run_id"]=NSUUID.UUID.UUIDString;
+    metadata[@"chart_smoothing"]=@"none"; metadata[@"chart_value"]=mode==3?@"median":@"mean";
     if (mode==0) metadata[@"sweep"]=@"dense-16-v1";
     if (mode==1 || mode==2) metadata[@"sweep"]=@"block-stride-v1";
     self.metadataByMode[@(mode)]=metadata;
@@ -602,11 +619,12 @@ static NSTextField *Label(NSString *text, CGFloat size, NSFontWeight weight, NSC
                     if (status!=MB_OK) { failure=[NSString stringWithUTF8String:mb_error(ctx)]; break; }
                     MBPoint *point=[MBPoint new]; point.result=result; ++completed;
                     double progress=(double)completed/total;
-                    dispatch_async(dispatch_get_main_queue(), ^{
+                    // Finish heavy report/table/chart updates before timing the next point.
+                    dispatch_sync(dispatch_get_main_queue(), ^{
                         [runPoints addObject:point]; self.content.progress.doubleValue=progress;
                         if (self.selectedMode!=mode || self.content.showingAbout) return;
                         self.content.statusLabel.stringValue=[NSString stringWithFormat:@"%@ · %@ · %.0f%%",op==MB_EXECUTE?@"Выполнение кода":op==MB_WRITE?@"Запись":op==MB_LATENCY?@"Задержка":@"Чтение",SizeLabel(result.bytes),progress*100];
-                        [self refreshResults];
+                        [self refreshResults]; [self.content displayIfNeeded];
                         if (self.smokeTest && !self.smokeNavigated) { self.smokeNavigated=YES; [self smokeNavigation]; }
                     });
                 }
@@ -680,6 +698,9 @@ static NSTextField *Label(NSString *text, CGFloat size, NSFontWeight weight, NSC
         }
     }
     if (self.smokePass==0) {
+        NSString *path=NSProcessInfo.processInfo.environment[@"MB_SMOKE_SCREENSHOT"];
+        NSData *first=[NSJSONSerialization dataWithJSONObject:[self currentReport] options:NSJSONWritingPrettyPrinted error:nil];
+        if (path.length && ![first writeToFile:[[path stringByDeletingPathExtension] stringByAppendingString:@"-first.json"] atomically:YES]) exit(1);
         [self saveBaseline:nil];
         if (!self.baselines[@(self.selectedMode)]) exit(1);
         [self.baselines removeAllObjects]; [self loadBaselines];
@@ -694,6 +715,13 @@ static NSTextField *Label(NSString *text, CGFloat size, NSFontWeight weight, NSC
         [self.table reloadData]; [self.table.headerView setNeedsDisplay:YES];
         [self writeSmokeScreenshot:[[path stringByDeletingPathExtension] stringByAppendingString:@"-dark.png"]];
         NSDictionary *report=[self currentReport];
+        for (NSDictionary *record in report[@"points"]) {
+            mb_result r; if (!MBDecodePoint(record,&r) || !r.work_units_per_iteration) exit(1);
+        }
+        [self showAudit:nil];
+        NSString *audit=MBTimingDescription([self selectedAuditReport]);
+        if (![audit writeToFile:[[path stringByDeletingPathExtension] stringByAppendingString:@"-samples.txt"] atomically:YES encoding:NSUTF8StringEncoding error:nil]) exit(1);
+        [self.auditWindow close];
         NSData *json=[NSJSONSerialization dataWithJSONObject:report options:NSJSONWritingPrettyPrinted|NSJSONWritingSortedKeys error:nil];
         if (![json writeToFile:[[path stringByDeletingPathExtension] stringByAppendingString:@".json"] atomically:YES]) exit(1);
         if (![MBCSV(report) writeToFile:[[path stringByDeletingPathExtension] stringByAppendingString:@".csv"] atomically:YES encoding:NSUTF8StringEncoding error:nil]) exit(1);
@@ -749,11 +777,39 @@ static NSTextField *Label(NSString *text, CGFloat size, NSFontWeight weight, NSC
 }
 - (void)tableViewSelectionDidChange:(NSNotification *)notification {
     (void)notification; NSInteger row=self.table.selectedRow;
-    if (self.selectedMode==1 || self.selectedMode==2) { self.content.chart.selectedBytes=0; return; }
+    if (self.selectedMode==1 || self.selectedMode==2) { self.content.chart.selectedBytes=0; self.content.chart.pinnedBytes=0; return; }
     self.content.chart.selectedBytes=self.selectedMode==0?
         ((row>=0 && row<(NSInteger)self.rangeRows.count)?[self.rangeRows[row][@"buffer_bytes"] unsignedLongLongValue]:0):
         ((row>=0 && row<(NSInteger)self.points.count)?self.points[row].result.bytes:0);
+    self.content.chart.pinnedBytes=self.content.chart.selectedBytes;
     [self.content.chart setNeedsDisplay:YES];
+}
+- (void)toggleBaseline:(id)sender { (void)sender; [self refreshResults]; }
+- (NSDictionary *)selectedAuditReport {
+    NSMutableDictionary *report=[[self currentReport] mutableCopy];
+    MBPoint *last=self.points.lastObject; if (!last) return report;
+    BOOL blocks=self.selectedMode==1 || self.selectedMode==2;
+    size_t selected=self.content.chart.selectedBytes ?: (blocks?last.result.stride_bytes:last.result.bytes);
+    NSMutableArray *records=[NSMutableArray array];
+    for (MBPoint *p in self.points) {
+        mb_result r=p.result;
+        if ((blocks?r.stride_bytes:r.bytes)==selected) [records addObject:MBPointRecord(r)];
+    }
+    report[@"points"]=records; return report;
+}
+- (void)showAudit:(id)sender {
+    (void)sender; if (self.running || !self.points.count) return;
+    if (!self.auditWindow) {
+        self.auditWindow=[[NSWindow alloc] initWithContentRect:NSMakeRect(0,0,880,570) styleMask:NSWindowStyleMaskTitled|NSWindowStyleMaskClosable|NSWindowStyleMaskResizable backing:NSBackingStoreBuffered defer:NO];
+        self.auditWindow.releasedWhenClosed=NO; self.auditWindow.title=@"Memory Lab — исходные замеры";
+    }
+    NSScrollView *scroll=[[NSScrollView alloc] initWithFrame:self.auditWindow.contentView.bounds];
+    scroll.autoresizingMask=NSViewWidthSizable|NSViewHeightSizable; scroll.hasVerticalScroller=YES;
+    NSTextView *text=[[NSTextView alloc] initWithFrame:scroll.bounds]; text.editable=NO;
+    text.font=[NSFont monospacedSystemFontOfSize:12 weight:NSFontWeightRegular]; text.textContainerInset=NSMakeSize(16,16);
+    text.autoresizingMask=NSViewWidthSizable; text.textContainer.widthTracksTextView=YES;
+    text.string=MBTimingDescription([self selectedAuditReport]); scroll.documentView=text;
+    self.auditWindow.contentView=scroll; [self.auditWindow center]; [self.auditWindow makeKeyAndOrderFront:nil];
 }
 - (void)exportCSV:(id)sender { (void)sender; [self exportReportJSON:NO]; }
 - (void)exportJSON:(id)sender { (void)sender; [self exportReportJSON:YES]; }

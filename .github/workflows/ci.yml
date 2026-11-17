@@ -42,6 +42,8 @@ jobs:
         run: |
           MB_SMOKE_MODE=read MB_SMOKE_SCREENSHOT="$PWD/build/memory-lab-read.png" "build/Memory Benchmark.app/Contents/MacOS/MemoryBenchmark" --smoke-test
           MB_SMOKE_MODE=write MB_SMOKE_SCREENSHOT="$PWD/build/memory-lab-write.png" "build/Memory Benchmark.app/Contents/MacOS/MemoryBenchmark" --smoke-test
+      - name: Independently recompute every GUI sample from counters and elapsed time
+        run: python3 Tests/verify_gui_evidence.py build
       - name: Package universal app
         run: ditto -c -k --sequesterRsrc --keepParent "build/Memory Benchmark.app" "build/MemoryLab-Universal.zip"
       - uses: actions/upload-artifact@v7
