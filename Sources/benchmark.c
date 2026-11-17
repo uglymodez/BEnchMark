@@ -84,6 +84,21 @@ double mb_result_mean(const mb_result *r) {
     return r && mb_summarize(r->sample_values,r->samples,&stats) ? stats.mean : 0;
 }
 
+size_t mb_profile_sizes(size_t maximum, size_t *sizes, size_t capacity) {
+    if (!sizes || maximum<64UL*1024*1024 || maximum>1024UL*1024*1024 || maximum%256) return 0;
+    size_t count=0;
+    for (size_t base=4096;base<maximum;base*=2) {
+        for (size_t step=0;step<16;++step) {
+            size_t bytes=base+base/16*step;
+            if (bytes>=maximum) break;
+            if (count>=capacity) return 0;
+            sizes[count++]=bytes;
+        }
+    }
+    if (count>=capacity) return 0;
+    sizes[count++]=maximum;
+    return count;
+}
 size_t mb_compact_sizes(size_t maximum, size_t *sizes, size_t capacity) {
     if (!sizes || capacity<5 || maximum<64UL*1024*1024 ||
         maximum>1024UL*1024*1024 || maximum%256) return 0;

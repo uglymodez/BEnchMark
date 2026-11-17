@@ -35,7 +35,7 @@ jobs:
       - name: Launch AppKit, restore baseline and compare two real sweeps
         run: |
           MB_SMOKE_SCREENSHOT="$PWD/build/memory-lab.png" "build/Memory Benchmark.app/Contents/MacOS/MemoryBenchmark" --smoke-test
-      - name: Validate five ranges, read/write means and relative speeds
+      - name: Validate detailed chart, five summary rows and relative speeds
         run: |
           MB_SMOKE_MODE=ranges MB_SMOKE_SCREENSHOT="$PWD/build/memory-lab-ranges.png" "build/Memory Benchmark.app/Contents/MacOS/MemoryBenchmark" --smoke-test
       - name: Package universal app

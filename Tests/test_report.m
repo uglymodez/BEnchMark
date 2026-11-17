@@ -88,6 +88,40 @@ int main(void) {
         ranges[@"points"]=rangePoints; rangeMeta[@"sweep"]=@"wrong"; assert(!MBValidReport(ranges));
         assert(!MBComparable(rangeMeta,rangeMeta));
         assert(MBRangeSummary(@{}).count==0);
+        // Dense chart has every intermediate read/write pair but the summary
+        // remains five reference buffers. Intermediate peaks do not redefine %.
+        rangeMeta[@"sweep"]=@"compact-5-v1";
+        NSDictionary *oldMeta=[rangeMeta copy];
+        rangeMeta[@"sweep"]=@"dense-16-v1";
+        assert(!MBComparable(rangeMeta,oldMeta)); assert(!MBComparable(oldMeta,rangeMeta));
+        size_t denseSizes[MB_PROFILE_CAPACITY];
+        size_t denseCount=mb_profile_sizes(64*1024*1024,denseSizes,MB_PROFILE_CAPACITY);
+        NSMutableArray *densePoints=[NSMutableArray array];
+        for (size_t i=0;i<denseCount;++i) for (int op=0;op<2;++op) {
+            NSDictionary *anchor=nil;
+            for (NSDictionary *p in rangePoints) if ([p[@"buffer_bytes"] unsignedLongLongValue]==denseSizes[i] && [p[@"operation_id"] intValue]==op) anchor=p;
+            mb_result intermediate={.bytes=denseSizes[i],.operation=(mb_operation)op,.samples=3,.seconds=.01,.passes=30,.sample_values={900,1000,1100}};
+            [densePoints addObject:anchor ?: MBPointRecord(intermediate)];
+        }
+        ranges[@"points"]=densePoints;
+        assert(densePoints.count==450 && MBValidReport(ranges));
+        assert(MBComparable(rangeMeta,rangeMeta));
+        assert([MBRangeSummary(ranges) isEqual:summary]);
+        NSUInteger csvCount=0, percentCount=0;
+        for (NSString *line in [MBCSV(ranges) componentsSeparatedByString:@"\n"]) if ([line hasPrefix:@"read,"] || [line hasPrefix:@"write,"]) {
+            NSArray *fields=[line componentsSeparatedByString:@","];
+            assert(fields.count==21); ++csvCount;
+            if ([fields[20] length]) ++percentCount;
+            else assert([fields[19] doubleValue]==1000);
+        }
+        assert(csvCount==450 && percentCount==10);
+        rangeMeta[@"complete"]=@NO;
+        for (NSDictionary *entry in MBRangeSummary(ranges)) assert(!entry[@"read"][@"relative_speed_percent"]);
+        rangeMeta[@"complete"]=@YES;
+        NSMutableArray *missing=[densePoints mutableCopy]; [missing removeObjectAtIndex:3];
+        ranges[@"points"]=missing; assert(!MBValidReport(ranges));
+        ranges[@"points"]=rangePoints; assert(!MBValidReport(ranges)); // sparse data cannot masquerade as dense
+        ranges[@"points"]=densePoints; rangeMeta[@"sweep"]=@"compact-5-v1"; assert(!MBValidReport(ranges));
         mb_destroy(ctx); puts("PASS: JSON round trip, malformed reports, comparison compatibility, CSV units");
     }
 }
