@@ -475,6 +475,9 @@ static NSTextField *Label(NSString *text, CGFloat size, NSFontWeight weight, NSC
 }
 - (void)changeTab:(id)sender {
     (void)sender; [self rememberSettings];
+    // AppKit may ask for old visible rows while columns are being replaced.
+    // Disconnect the table until both the model and columns describe the new tab.
+    self.table.delegate=nil; self.table.dataSource=nil; [self.table reloadData];
     NSInteger tab=self.content.tabs.selectedSegment;
     if (tab<0 || tab>4) return;
     self.selectedMode=tab<3?[self.experiments[@(tab)] integerValue]:tab;
@@ -493,7 +496,8 @@ static NSTextField *Label(NSString *text, CGFloat size, NSFontWeight weight, NSC
     NSDictionary *meta=self.metadataByMode[@(mode)];
     const size_t maxima[]={64UL*1024*1024,256UL*1024*1024,512UL*1024*1024,1024UL*1024*1024};
     self.content.chart.maximum=meta?[meta[@"maximum_bytes"] unsignedLongLongValue]:maxima[self.content.maximumPopup.indexOfSelectedItem];
-    [self configureTable]; [self refreshResults]; [self updateControls];
+    [self configureTable]; [self refreshResults];
+    self.table.dataSource=self; self.table.delegate=self; [self.table reloadData]; [self updateControls];
     [self.content setNeedsLayout:YES];
 }
 - (void)updateControls {
@@ -717,7 +721,8 @@ static NSTextField *Label(NSString *text, CGFloat size, NSFontWeight weight, NSC
     for (NSInteger tab=0;tab<5;++tab) {
         fprintf(stderr,"SMOKE tab %ld\n",(long)tab);
         self.content.tabs.selectedSegment=tab;
-        [NSApp sendAction:self.content.tabs.action to:self.content.tabs.target from:self.content.tabs];
+        @try { [NSApp sendAction:self.content.tabs.action to:self.content.tabs.target from:self.content.tabs]; }
+        @catch (NSException *exception) { fprintf(stderr,"Navigation exception: %s\n%s\n",exception.reason.UTF8String,exception.callStackSymbols.description.UTF8String); exit(1); }
         [self.content layoutSubtreeIfNeeded];
         NSView *hit=[self.content hitTest:[self.content convertPoint:NSMakePoint(NSMidX(self.content.tabs.frame),NSMidY(self.content.tabs.frame)) toView:self.content.superview]];
         if (hit!=self.content.tabs && ![hit isDescendantOf:self.content.tabs]) { fprintf(stderr,"Tabs intercepted by another view\n"); exit(1); }
@@ -795,7 +800,7 @@ static NSTextField *Label(NSString *text, CGFloat size, NSFontWeight weight, NSC
 }
 - (NSInteger)numberOfRowsInTableView:(NSTableView *)view { (void)view; return BlockMode(self.selectedMode)?self.blockRows.count:SummaryMode(self.selectedMode)?self.rangeRows.count:self.points.count; }
 - (NSView *)tableView:(NSTableView *)table viewForTableColumn:(NSTableColumn *)column row:(NSInteger)row {
-    (void)table;
+    if (row<0 || row>=[self numberOfRowsInTableView:table]) return nil;
     if (BlockMode(self.selectedMode)) {
         NSDictionary *value=self.blockRows[row]; NSInteger col=column.identifier.integerValue;
         NSNumber *n=col?value[@[@"minimum",@"maximum",@"mean",@"linear",@"relative_speed_percent"][col-1]]:value[@"block_bytes"];
