@@ -54,6 +54,10 @@ size_t mb_sizes(size_t maximum, size_t *sizes, size_t capacity);
 /* Five representative buffers, not detected hardware cache levels.
    4 KiB, 64 KiB, 1 MiB, 16 MiB, maximum (64 MiB .. 1 GiB). */
 size_t mb_compact_sizes(size_t maximum, size_t *sizes, size_t capacity);
+/* Detailed read/write chart: 16 intervals per doubling, including the five
+   summary anchors. At most 289 sizes for a 1 GiB maximum. */
+#define MB_PROFILE_CAPACITY 300
+size_t mb_profile_sizes(size_t maximum, size_t *sizes, size_t capacity);
 #endif
 
 

@@ -51,7 +51,7 @@ BOOL MBComparable(NSDictionary *a, NSDictionary *b) {
     for (NSString *key in @[@"method",@"machine",@"mode",@"maximum_bytes",@"seconds_per_sample",@"samples",@"threads",@"low_power"])
         if (!a[key] || ![a[key] isEqual:b[key]]) return NO;
     if ([a[@"mode"] isEqual:@"Memory Ranges"] &&
-        (![a[@"sweep"] isEqual:@"compact-5-v1"] || ![a[@"sweep"] isEqual:b[@"sweep"]])) return NO;
+        (![@[@"compact-5-v1",@"dense-16-v1"] containsObject:a[@"sweep"] ?: NSNull.null] || ![a[@"sweep"] isEqual:b[@"sweep"]])) return NO;
     return [b[@"complete"] isEqual:@YES] && ![a[@"power_changed"] isEqual:@YES] && ![b[@"power_changed"] isEqual:@YES];
 }
 BOOL MBValidReport(id report) {
@@ -60,7 +60,7 @@ BOOL MBValidReport(id report) {
         ![report[@"points"] isKindOfClass:NSArray.class]) return NO;
     NSDictionary *meta=report[@"metadata"]; NSArray *points=report[@"points"];
     if (![meta[@"method"] isEqual:@(mb_method_version())] || ![meta[@"complete"] isEqual:@YES] ||
-        !points.count || points.count>160) return NO;
+        !points.count || points.count>2*MB_PROFILE_CAPACITY) return NO;
     NSArray *modes=@[@"Cache Speed",@"Read RAM",@"Write RAM",@"Latency",@"Memory Ranges"];
     NSUInteger mode=[modes indexOfObject:meta[@"mode"] ?: NSNull.null];
     if (mode==NSNotFound || ![meta[@"machine"] isKindOfClass:NSString.class]) return NO;
@@ -72,8 +72,11 @@ BOOL MBValidReport(id report) {
         ![meta[@"threads"] isEqual:@1] || (! [meta[@"low_power"] isEqual:@0] && ![meta[@"low_power"] isEqual:@1])) return NO;
     if (meta[@"power_changed"] && !Number(meta[@"power_changed"])) return NO;
     BOOL compact=mode==4;
-    if (compact && ![meta[@"sweep"] isEqual:@"compact-5-v1"]) return NO;
-    size_t sizes[80], count=compact?mb_compact_sizes((size_t)maximum,sizes,80):mb_sizes((size_t)maximum,sizes,80); NSUInteger index=0;
+    BOOL dense=compact && [meta[@"sweep"] isEqual:@"dense-16-v1"];
+    if (compact && !dense && ![meta[@"sweep"] isEqual:@"compact-5-v1"]) return NO;
+    size_t sizes[MB_PROFILE_CAPACITY], count=dense?mb_profile_sizes((size_t)maximum,sizes,MB_PROFILE_CAPACITY):
+        compact?mb_compact_sizes((size_t)maximum,sizes,MB_PROFILE_CAPACITY):mb_sizes((size_t)maximum,sizes,MB_PROFILE_CAPACITY);
+    NSUInteger index=0;
     if (!count) return NO;
     for (size_t i=0;i<count;++i) {
         int operations=(compact || (mode==0 && sizes[i]<=64*1024*1024))?2:1;
@@ -123,7 +126,7 @@ NSString *MBCSV(NSDictionary *report) {
     for (NSString *key in [[meta allKeys] sortedArrayUsingSelector:@selector(compare:)])
         [csv appendFormat:@"# %@: %@\n",key,SafeComment(meta[key])];
     NSArray *summary=MBRangeSummary(report);
-    if (summary.count) [csv appendString:@"# relative_speed_percent: mean / fastest mean of the same operation in this complete sweep * 100; not cache hit rate\n"];
+    if (summary.count) [csv appendString:@"# relative_speed_percent: mean / fastest mean of the same operation among the five summary buffers * 100, only after a complete sweep; blank for intermediate chart points; not cache hit rate\n"];
     [csv appendString:@"operation,buffer_bytes,unit,median,minimum,maximum,cv_percent,total_sample_seconds,iterations,samples,sample_1,sample_2,sample_3,sample_4,sample_5,sample_6,sample_7,sample_8,sample_9,mean,relative_speed_percent\n"];
     for (NSDictionary *point in report[@"points"]) {
         mb_result r; if (!MBDecodePoint(point,&r)) continue;

@@ -30,6 +30,27 @@ int main(void) {
     mb_result asymmetric={.samples=3,.sample_values={1,2,9}};
     assert(mb_result_mean(&asymmetric)==4);
     assert(mb_result_mean(NULL)==0);
+    size_t detailed[MB_PROFILE_CAPACITY], anchors[5];
+    for (size_t maximum=64UL*1024*1024;maximum<=1024UL*1024*1024;maximum*=2) {
+        size_t count=mb_profile_sizes(maximum,detailed,MB_PROFILE_CAPACITY);
+        assert(count==225+16*(size_t)log2((double)maximum/(64*1024*1024)));
+        assert(detailed[0]==4096 && detailed[count-1]==maximum);
+        for (size_t i=1;i<count;++i) {
+            assert(detailed[i]>detailed[i-1] && detailed[i]%256==0);
+            assert(detailed[i]-detailed[i-1]<=detailed[i-1]/16);
+        }
+        assert(mb_compact_sizes(maximum,anchors,5)==5);
+        for (unsigned a=0;a<5;++a) {
+            unsigned matches=0;
+            for (size_t i=0;i<count;++i) matches+=detailed[i]==anchors[a];
+            assert(matches==1);
+        }
+        assert(mb_profile_sizes(maximum,detailed,count-1)==0);
+    }
+    assert(mb_profile_sizes(64*1024*1024,NULL,MB_PROFILE_CAPACITY)==0);
+    assert(mb_profile_sizes(16*1024*1024,detailed,MB_PROFILE_CAPACITY)==0);
+    assert(mb_profile_sizes(64*1024*1024+1,detailed,MB_PROFILE_CAPACITY)==0);
+    assert(mb_profile_sizes(64*1024*1024+256,detailed,MB_PROFILE_CAPACITY)==226);
     mb_context *ctx=mb_create(); assert(ctx);
     mb_result r;
     assert(mb_measure(ctx,MB_READ,4097,0.002,3,&r)==MB_ERROR);
