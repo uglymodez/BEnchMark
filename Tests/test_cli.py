@@ -23,6 +23,8 @@ for p in report['points']:
     assert math.isclose(statistics.median(p['sample_values']), p['median'], abs_tol=1e-8)
     expected = statistics.pstdev(p['sample_values']) / statistics.mean(p['sample_values']) * 100
     assert math.isclose(expected, p['cv_percent'], abs_tol=1e-5)
+    assert p['warmup_seconds'] >= p['warmup_target_seconds'] >= .1 and p['warmup_iterations'] > 0
+    assert math.isclose(p['sample_drift_percent'], (p['sample_values'][-1]/p['sample_values'][0]-1)*100, abs_tol=1e-5)
     assert p['unit'] == ('ns/load' if p['operation'] == 'latency' else 'GB/s')
 result = subprocess.run(base + ['--mode', 'latency', '--descending'], capture_output=True, text=True, check=True)
 rows = list(csv.DictReader(io.StringIO('\n'.join(line for line in result.stdout.splitlines() if not line.startswith('#')))))
@@ -49,3 +51,4 @@ assert p.returncode == 130
 partial = json.loads(header + first + tail)
 assert partial['metadata']['state'] == 'cancelled' and partial['points']
 print('PASS: CLI JSON/CSV, raw statistics, descending sweep, argument errors, SIGINT')
+

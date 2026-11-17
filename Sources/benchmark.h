@@ -30,6 +30,8 @@ typedef struct {
     double sample_seconds[MB_MAX_SAMPLES];
     uint64_t sample_iterations[MB_MAX_SAMPLES];
     uint64_t work_units_per_iteration; /* bytes; loads for MB_LATENCY */
+    double warmup_target_seconds, warmup_seconds; /* Separate from measured samples. */
+    uint64_t warmup_iterations;
     double cv_percent; /* Population standard deviation / mean, percent. */
 } mb_result;
 
@@ -48,6 +50,11 @@ double mb_result_value(const mb_result *result);
 double mb_result_minimum(const mb_result *result);
 double mb_result_maximum(const mb_result *result);
 double mb_result_mean(const mb_result *result);
+/* Bounded time-based warmup for the same workload: 100..300 ms. */
+double mb_warmup_duration(double sample_seconds);
+/* Mean of last floor(n/2) vs first floor(n/2), excluding the middle sample.
+   Signed change in the measured unit; zero if fewer than three samples. */
+double mb_result_drift_percent(const mb_result *result);
 /* Rejects nonfinite/nonpositive values; does not mutate input. */
 int mb_summarize(const double *values, unsigned count, mb_statistics *statistics);
 /* Sizes: 4 KiB .. 1 GiB, multiples of 256. Execute: up to 64 MiB. */

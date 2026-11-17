@@ -10,7 +10,7 @@ root = Path(sys.argv[1])
 for name in ('memory-lab', 'memory-lab-ranges', 'memory-lab-read', 'memory-lab-write'):
     report = json.loads((root / (name + '.json')).read_text())
     first = json.loads((root / (name + '-first.json')).read_text())
-    assert report['metadata']['measurement_protocol'] == 'timing-audit-v1'
+    assert report['metadata']['measurement_protocol'] == 'timing-warmup-v2'
     assert report['metadata']['complete'] and first['metadata']['complete']
     assert report['metadata']['run_id'] != first['metadata']['run_id']
     assert report['points'] != first['points'], 'Repeat run must not reuse saved points'
@@ -18,6 +18,12 @@ for name in ('memory-lab', 'memory-lab-ranges', 'memory-lab-read', 'memory-lab-w
     assert len(records) == len(report['points'])
     for run in (first, report):
         for p in run['points']:
+            target = min(.3, max(.1, 6*run['metadata']['seconds_per_sample']))
+            assert math.isclose(p['warmup_target_seconds'], target, abs_tol=1e-12)
+            assert p['warmup_seconds'] >= target and p['warmup_iterations'] > 0
+            half = p['samples']//2
+            drift = (sum(p['sample_values'][-half:])/sum(p['sample_values'][:half])-1)*100
+            assert math.isclose(p['sample_drift_percent'], drift, abs_tol=1e-8)
             assert len(p['sample_seconds']) == len(p['sample_iterations']) == p['samples']
             assert sum(p['sample_iterations']) == p['iterations']
             assert math.isclose(sum(p['sample_seconds']), p['total_sample_seconds'], rel_tol=1e-12)
@@ -33,6 +39,10 @@ for name in ('memory-lab', 'memory-lab-ranges', 'memory-lab-read', 'memory-lab-w
             assert math.isclose(statistics.mean(rates), p['mean'], rel_tol=1e-12)
             assert math.isclose(statistics.median(rates), p['median'], rel_tol=1e-12)
     for p, c in zip(report['points'], records):
+        assert float(c['warmup_seconds']) == p['warmup_seconds']
+        assert float(c['warmup_target_seconds']) == p['warmup_target_seconds']
+        assert int(c['warmup_iterations']) == p['warmup_iterations']
+        assert math.isclose(float(c['sample_drift_percent']), p['sample_drift_percent'], abs_tol=1e-8)
         assert int(c['work_units_per_iteration']) == p['work_units_per_iteration']
         for i, (seconds, iterations) in enumerate(zip(p['sample_seconds'], p['sample_iterations']), 1):
             assert float(c[f'sample_{i}_seconds']) == seconds
@@ -42,5 +52,6 @@ for name in ('memory-lab', 'memory-lab-ranges', 'memory-lab-read', 'memory-lab-w
         linear = next(p['mean'] for p in points if p['stride_bytes']==p['block_bytes'])
         mean = statistics.mean(p['mean'] for p in points if p['stride_bytes']!=p['block_bytes'])
         assert math.isclose(row['efficiency_percent'], mean/linear*100, rel_tol=1e-12)
-    assert (root / (name + '-samples.txt')).read_text().startswith('Исходные измерения')
+    text = (root / (name + '-samples.txt')).read_text()
+    assert text.startswith('Исходные измерения') and 'Прогрев:' in text and 'Изменение к концу серии:' in text
     print('PASS independent timing evidence:', name, len(report['points']), 'points, two distinct runs')

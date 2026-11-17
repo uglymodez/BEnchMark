@@ -74,7 +74,8 @@ int main(int argc, char **argv) {
                "# order: %s\n# latency_stride_bytes: %d\n",
                mb_method_version(),mb_architecture(),started,profile,seconds,samples,maximum,
                descending?"descending":"ascending",MB_LATENCY_STRIDE);
-        puts("operation,buffer_bytes,unit,median,minimum,maximum,cv_percent,total_sample_seconds,iterations,samples,sample_1,sample_2,sample_3,sample_4,sample_5,sample_6,sample_7,sample_8,sample_9");
+        printf("# warmup_policy: same-workload-clamp-6x-100-300ms\n# warmup_target_seconds: %.9f\n",mb_warmup_duration(seconds));
+        puts("operation,buffer_bytes,unit,median,minimum,maximum,cv_percent,total_sample_seconds,iterations,samples,sample_1,sample_2,sample_3,sample_4,sample_5,sample_6,sample_7,sample_8,sample_9,warmup_target_seconds,warmup_seconds,warmup_iterations,sample_drift_percent");
     }
     size_t sizes[80], count=mb_sizes(maximum,sizes,80); int exit_code=0, emitted=0, unavailable=0;
     for (size_t i=0; i<count && !interrupted; ++i) {
@@ -98,7 +99,10 @@ int main(int argc, char **argv) {
                        mb_result_value(&r),mb_result_minimum(&r),mb_result_maximum(&r),r.cv_percent,
                        r.seconds,(unsigned long long)r.passes,r.samples);
                 for (unsigned k=0;k<r.samples;++k) printf("%s%.9f",k?",":"",r.sample_values[k]);
-                printf("]}");
+                printf("],\"warmup_target_seconds\":%.17g,\"warmup_seconds\":%.17g,\"warmup_iterations\":%llu,\"sample_drift_percent\":",
+                    r.warmup_target_seconds,r.warmup_seconds,(unsigned long long)r.warmup_iterations);
+                if (r.samples>=3) printf("%.9f",mb_result_drift_percent(&r)); else printf("null");
+                putchar('}');
             } else {
                 printf("%s,%zu,%s,%.9f,%.9f,%.9f,%.6f,%.9f,%llu,%u",
                        mb_operation_name(r.operation),r.bytes,mb_operation_unit(r.operation),
@@ -107,6 +111,8 @@ int main(int argc, char **argv) {
                 for (unsigned k=0;k<MB_MAX_SAMPLES;++k) {
                     if (k<r.samples) printf(",%.9f",r.sample_values[k]); else putchar(',');
                 }
+                printf(",%.17g,%.17g,%llu,",r.warmup_target_seconds,r.warmup_seconds,(unsigned long long)r.warmup_iterations);
+                if (r.samples>=3) printf("%.9f",mb_result_drift_percent(&r));
                 putchar('\n');
             }
             emitted=1; fflush(stdout);
@@ -118,7 +124,7 @@ done:
     if (json) {
         printf("\n],\"metadata\":{\"method\":\"%s\",\"architecture\":\"%s\",\"started\":\"%s\","
                "\"profile\":\"%s\",\"samples\":%u,\"seconds_per_sample\":%.6f,\"maximum_bytes\":%zu,"
-               "\"threads\":1,\"order\":\"%s\",\"latency_stride_bytes\":%d,"
+               "\"threads\":1,\"warmup_policy\":\"same-workload-clamp-6x-100-300ms\",\"order\":\"%s\",\"latency_stride_bytes\":%d,"
                "\"state\":\"%s\",\"complete\":%s,\"execute_available\":%s}}\n",
                mb_method_version(),mb_architecture(),started,profile,samples,seconds,maximum,
                descending?"descending":"ascending",MB_LATENCY_STRIDE,state,
@@ -129,3 +135,4 @@ done:
     if (ferror(stdout) && !exit_code) exit_code=1;
     return exit_code;
 }
+
