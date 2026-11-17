@@ -27,6 +27,8 @@ typedef struct {
     double maximum_nanoseconds_per_load;
     double sample_values[MB_MAX_SAMPLES]; /* Chronological, in mb_operation_unit(). */
     double cv_percent; /* Population standard deviation / mean, percent. */
+    unsigned block_bytes; /* 0 for the original size sweep; otherwise 32/64/128/256. */
+    int access_gap_bytes; /* Signed gap: negative traverses backwards; 0 is contiguous. */
 } mb_result;
 
 mb_context *mb_create(void);
@@ -58,6 +60,15 @@ size_t mb_compact_sizes(size_t maximum, size_t *sizes, size_t capacity);
    summary anchors. At most 289 sizes for a 1 GiB maximum. */
 #define MB_PROFILE_CAPACITY 300
 size_t mb_profile_sizes(size_t maximum, size_t *sizes, size_t capacity);
+/* Block experiment: step = block + abs(gap). Only explicitly accessed bytes
+   count towards GB/s. No claim about actual DRAM traffic/cache-line transfers. */
+#define MB_GAP_CAPACITY 47
+size_t mb_access_gaps(int *gaps, size_t capacity);
+size_t mb_block_visits(size_t bytes, unsigned block, int gap);
+mb_status mb_measure_blocks(mb_context *ctx, mb_operation operation, size_t bytes,
+                            unsigned block, int gap, double seconds,
+                            unsigned samples, mb_result *result);
 #endif
+
 
 
