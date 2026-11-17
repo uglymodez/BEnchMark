@@ -63,7 +63,7 @@ int main(void) {
         NSUInteger row=0;
         for (NSString *line in lines) if ([line hasPrefix:@"read,"] || [line hasPrefix:@"write,"]) {
             NSArray *fields=[line componentsSeparatedByString:@","];
-            assert(fields.count==21);
+            assert(fields.count==30);
             NSString *op=fields[0]; NSDictionary *value=summary[row/2][op];
             assert(fabs([fields[19] doubleValue]-[value[@"mean"] doubleValue])<1e-8);
             assert(fabs([fields[20] doubleValue]-[value[@"relative_speed_percent"] doubleValue])<1e-5);
@@ -79,7 +79,7 @@ int main(void) {
         assert(MBDecodePoint(forged,&restored) && mb_result_mean(&restored)==4);
         rangeMeta[@"complete"]=@NO; assert(!MBValidReport(ranges));
         for (NSDictionary *entry in MBRangeSummary(ranges)) assert(!entry[@"read"][@"relative_speed_percent"]);
-        assert([MBCSV(ranges) containsString:@",4.000000000,\n"]);
+        assert([MBCSV(ranges) containsString:@",4.000000000,,0,0,,false,,,,,\n"]);
         rangeMeta[@"complete"]=@YES;
         ranges[@"points"]=[rangePoints subarrayWithRange:NSMakeRange(0,9)]; assert(!MBValidReport(ranges));
         for (NSDictionary *entry in MBRangeSummary(ranges)) assert(!entry[@"write"][@"relative_speed_percent"]);
@@ -110,7 +110,7 @@ int main(void) {
         NSUInteger csvCount=0, percentCount=0;
         for (NSString *line in [MBCSV(ranges) componentsSeparatedByString:@"\n"]) if ([line hasPrefix:@"read,"] || [line hasPrefix:@"write,"]) {
             NSArray *fields=[line componentsSeparatedByString:@","];
-            assert(fields.count==21); ++csvCount;
+            assert(fields.count==30); ++csvCount;
             if ([fields[20] length]) ++percentCount;
             else assert([fields[19] doubleValue]==1000);
         }
@@ -122,6 +122,34 @@ int main(void) {
         ranges[@"points"]=missing; assert(!MBValidReport(ranges));
         ranges[@"points"]=rangePoints; assert(!MBValidReport(ranges)); // sparse data cannot masquerade as dense
         ranges[@"points"]=densePoints; rangeMeta[@"sweep"]=@"compact-5-v1"; assert(!MBValidReport(ranges));
+        NSMutableDictionary *blockMeta=[meta mutableCopy];
+        blockMeta[@"mode"]=@"Read RAM"; blockMeta[@"sweep"]=@"block-stride-v1"; blockMeta[@"maximum_bytes"]=@65536;
+        NSMutableArray *blockPoints=[NSMutableArray array];
+        for (size_t block=32;block<=256;block*=2) for (unsigned i=0;i<=MB_BLOCK_STEPS;++i) {
+            mb_result v={.bytes=65536,.block_bytes=block,.stride_bytes=i?1024+(i-1)*256:block,
+                .operation=MB_READ,.samples=3,.seconds=.01,.passes=30,.sample_values={1,2,9}};
+            if (!i) { v.sample_values[0]=2; v.sample_values[1]=2; v.sample_values[2]=2; }
+            [blockPoints addObject:MBPointRecord(v)];
+        }
+        NSMutableDictionary *blockReport=[@{@"schema_version":@2,@"metadata":blockMeta,@"points":blockPoints} mutableCopy];
+        assert(MBValidReport(blockReport)); assert(MBComparable(blockMeta,blockMeta));
+        NSArray *blockSummary=MBBlockSummary(blockReport); assert(blockSummary.count==4);
+        for (NSDictionary *row in blockSummary) {
+            assert([row[@"minimum"] doubleValue]==1 && [row[@"maximum"] doubleValue]==9);
+            assert([row[@"mean"] doubleValue]==4 && [row[@"linear"] doubleValue]==2);
+            assert([row[@"efficiency_percent"] doubleValue]==200); // Not clamped to 100%.
+        }
+        assert([MBCSV(blockReport) containsString:@",32,1024,-3072,false"]);
+        assert([MBCSV(blockReport) containsString:@",32,32,,true"]);
+        blockMeta[@"complete"]=@NO;
+        for (NSDictionary *row in MBBlockSummary(blockReport)) assert(!row[@"efficiency_percent"]);
+        blockMeta[@"complete"]=@YES;
+        blockReport[@"points"]=[blockPoints subarrayWithRange:NSMakeRange(0,167)]; assert(!MBValidReport(blockReport));
+        blockReport[@"points"]=blockPoints;
+        NSMutableDictionary *legacy=[blockMeta mutableCopy]; [legacy removeObjectForKey:@"sweep"];
+        assert(!MBComparable(blockMeta,legacy) && !MBComparable(legacy,blockMeta));
+        NSMutableDictionary *invalid=[blockPoints[1] mutableCopy]; invalid[@"stride_bytes"]=@1001;
+        assert(!MBDecodePoint(invalid,&restored));
         mb_destroy(ctx); puts("PASS: JSON round trip, malformed reports, comparison compatibility, CSV units");
     }
 }

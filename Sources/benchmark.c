@@ -371,6 +371,68 @@ mb_status mb_measure(mb_context *ctx, mb_operation op, size_t n,
     return MB_OK;
 }
 
+
+/* All offsets are 16-byte aligned. Explicit SIMD accesses preserve the work;
+   holes between blocks are not included in throughput. */
+static NOINLINE uint64_t block_pass(unsigned char *p, size_t n, size_t block, size_t stride, int write) {
+    uint64_t sink=0;
+#if defined(__aarch64__)
+    uint64x2_t acc=vdupq_n_u64(0), value=vdupq_n_u64(UINT64_C(0x9e3779b97f4a7c15));
+#else
+    __m128i acc=_mm_setzero_si128(), value=_mm_set1_epi64x((long long)UINT64_C(0x9e3779b97f4a7c15));
+#endif
+    for (size_t i=0;i<=n-block;i+=stride) for (size_t j=0;j<block;j+=16) {
+#if defined(__aarch64__)
+        if (write) __asm__ volatile("str %q0, [%1]" :: "w"(value), "r"(p+i+j) : "memory");
+        else { uint64x2_t v; __asm__ volatile("ldr %q0, [%1]" : "=w"(v) : "r"(p+i+j) : "memory"); acc=veorq_u64(acc,v); }
+#else
+        if (write) __asm__ volatile("movdqa %0, (%1)" :: "x"(value), "r"(p+i+j) : "memory");
+        else { __m128i v; __asm__ volatile("movdqa (%1), %0" : "=x"(v) : "r"(p+i+j) : "memory"); acc=_mm_xor_si128(acc,v); }
+#endif
+    }
+#if defined(__aarch64__)
+    sink=vgetq_lane_u64(acc,0)^vgetq_lane_u64(acc,1);
+#else
+    sink=(uint64_t)_mm_cvtsi128_si64(acc)^(uint64_t)_mm_cvtsi128_si64(_mm_srli_si128(acc,8));
+#endif
+    return sink;
+}
+mb_status mb_measure_blocks(mb_context *ctx, mb_operation op, size_t n,
+    size_t block, size_t stride, double duration, unsigned count, mb_result *out) {
+    if (!ctx || !out) return MB_ERROR;
+    memset(out,0,sizeof(*out)); ctx->error[0]=0;
+    if ((op!=MB_READ && op!=MB_WRITE) || n<16384 || n>MB_MAX || n%256 ||
+        (block!=32 && block!=64 && block!=128 && block!=256) ||
+        (stride!=block && (stride<1024 || stride>11264 || stride%256)) ||
+        !isfinite(duration) || duration<.001 || duration>1 || count<1 || count>MB_MAX_SAMPLES) {
+        problem(ctx,"Invalid block workload settings."); return MB_ERROR;
+    }
+    if (mb_is_cancelled(ctx)) return MB_CANCELLED;
+    mb_status status=prepare_data(ctx,n); if (status!=MB_OK) return status;
+    ctx->sink^=block_pass(ctx->data,n,block,stride,op==MB_WRITE);
+    if (op==MB_WRITE) finish_stores();
+    size_t useful=((n-block)/stride+1)*block;
+    double values[MB_MAX_SAMPLES],seconds=0; uint64_t total=0;
+    for (unsigned s=0;s<count;++s) {
+        double start=now(),elapsed; uint64_t passes=0;
+        do {
+            if (mb_is_cancelled(ctx)) return MB_CANCELLED;
+            ctx->sink^=block_pass(ctx->data,n,block,stride,op==MB_WRITE); ++passes;
+            if (op==MB_WRITE) finish_stores();
+            elapsed=now()-start;
+        } while (elapsed<duration);
+        values[s]=(double)useful*passes/elapsed/1e9; seconds+=elapsed; total+=passes;
+    }
+    if (mb_is_cancelled(ctx)) return MB_CANCELLED;
+    mb_statistics stats;
+    if (!mb_summarize(values,count,&stats)) { problem(ctx,"Invalid block statistics."); return MB_ERROR; }
+    out->bytes=n; out->block_bytes=block; out->stride_bytes=stride; out->operation=op;
+    out->samples=count; out->seconds=seconds; out->passes=total;
+    out->gb_per_second=stats.median; out->minimum_gb_per_second=stats.minimum;
+    out->maximum_gb_per_second=stats.maximum; out->cv_percent=stats.cv_percent;
+    memcpy(out->sample_values,values,count*sizeof(double)); return MB_OK;
+}
+
 size_t mb_sizes(size_t max, size_t *sizes, size_t capacity) {
     if (max<MB_MIN || max>MB_MAX || max%256 || !sizes) return 0;
     size_t values[80], count=0, previous=0;

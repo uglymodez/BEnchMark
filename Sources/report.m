@@ -6,7 +6,7 @@ NSDictionary *MBPointRecord(mb_result r) {
     NSMutableArray *samples=[NSMutableArray array];
     for (unsigned i=0;i<r.samples;++i) [samples addObject:@(r.sample_values[i])];
     return @{@"operation_id":@(r.operation),@"operation":@(mb_operation_name(r.operation)),
-        @"buffer_bytes":@(r.bytes),@"unit":@(mb_operation_unit(r.operation)),
+        @"buffer_bytes":@(r.bytes),@"block_bytes":@(r.block_bytes),@"stride_bytes":@(r.stride_bytes),@"unit":@(mb_operation_unit(r.operation)),
         @"median":@(mb_result_value(&r)),@"minimum":@(mb_result_minimum(&r)),
         @"maximum":@(mb_result_maximum(&r)),@"mean":@(mb_result_mean(&r)),@"cv_percent":@(r.cv_percent),
         @"total_sample_seconds":@(r.seconds),@"iterations":@(r.passes),@"samples":@(r.samples),@"sample_values":samples};
@@ -44,6 +44,16 @@ BOOL MBDecodePoint(id d, mb_result *out) {
     } else {
         out->gb_per_second=stats.median; out->minimum_gb_per_second=stats.minimum; out->maximum_gb_per_second=stats.maximum;
     }
+    if (d[@"block_bytes"] || d[@"stride_bytes"]) {
+        if (!Number(d[@"block_bytes"]) || !Number(d[@"stride_bytes"])) return NO;
+        double block=[d[@"block_bytes"] doubleValue], stride=[d[@"stride_bytes"] doubleValue];
+        if (block || stride) {
+            if ((op!=MB_READ && op!=MB_WRITE) || bytes<16384 ||
+                (block!=32 && block!=64 && block!=128 && block!=256) ||
+                (stride!=block && (stride<1024 || stride>11264 || fmod(stride,256)))) return NO;
+            out->block_bytes=(size_t)block; out->stride_bytes=(size_t)stride;
+        }
+    }
     return YES;
 }
 BOOL MBComparable(NSDictionary *a, NSDictionary *b) {
@@ -52,6 +62,7 @@ BOOL MBComparable(NSDictionary *a, NSDictionary *b) {
         if (!a[key] || ![a[key] isEqual:b[key]]) return NO;
     if ([a[@"mode"] isEqual:@"Memory Ranges"] &&
         (![@[@"compact-5-v1",@"dense-16-v1"] containsObject:a[@"sweep"] ?: NSNull.null] || ![a[@"sweep"] isEqual:b[@"sweep"]])) return NO;
+    if ((a[@"sweep"] || b[@"sweep"]) && ![a[@"sweep"] isEqual:b[@"sweep"]]) return NO;
     return [b[@"complete"] isEqual:@YES] && ![a[@"power_changed"] isEqual:@YES] && ![b[@"power_changed"] isEqual:@YES];
 }
 BOOL MBValidReport(id report) {
@@ -71,6 +82,16 @@ BOOL MBValidReport(id report) {
         samples<1 || samples>MB_MAX_SAMPLES || floor(samples)!=samples || seconds<0.001 || seconds>1 ||
         ![meta[@"threads"] isEqual:@1] || (! [meta[@"low_power"] isEqual:@0] && ![meta[@"low_power"] isEqual:@1])) return NO;
     if (meta[@"power_changed"] && !Number(meta[@"power_changed"])) return NO;
+    if ([meta[@"sweep"] isEqual:@"block-stride-v1"]) {
+        if ((mode!=1 && mode!=2) || maximum<16384 || points.count!=4*(MB_BLOCK_STEPS+1)) return NO;
+        NSUInteger index=0;
+        for (size_t block=32;block<=256;block*=2) for (unsigned step=0;step<=MB_BLOCK_STEPS;++step) {
+            mb_result r; size_t stride=step==0?block:1024+(step-1)*256;
+            if (!MBDecodePoint(points[index++],&r) || r.block_bytes!=block || r.stride_bytes!=stride ||
+                r.bytes!=(size_t)maximum || r.samples!=(unsigned)samples || r.operation!=(mode==1?MB_READ:MB_WRITE)) return NO;
+        }
+        return YES;
+    }
     BOOL compact=mode==4;
     BOOL dense=compact && [meta[@"sweep"] isEqual:@"dense-16-v1"];
     if (compact && !dense && ![meta[@"sweep"] isEqual:@"compact-5-v1"]) return NO;
@@ -84,7 +105,7 @@ BOOL MBValidReport(id report) {
             mb_result r;
             mb_operation expected=j==1?(compact?MB_WRITE:MB_EXECUTE):mode==2?MB_WRITE:mode==3?MB_LATENCY:MB_READ;
             if (index>=points.count || !MBDecodePoint(points[index++],&r) || r.operation!=expected ||
-                r.bytes!=sizes[i] || r.samples!=(unsigned)samples) return NO;
+                r.block_bytes || r.stride_bytes || r.bytes!=sizes[i] || r.samples!=(unsigned)samples) return NO;
         }
     }
     if (index!=points.count) return NO;
@@ -117,6 +138,26 @@ NSArray<NSDictionary *> *MBRangeSummary(NSDictionary *report) {
     }
     return rows;
 }
+NSArray<NSDictionary *> *MBBlockSummary(NSDictionary *report) {
+    if (![report isKindOfClass:NSDictionary.class] || ![report[@"metadata"] isKindOfClass:NSDictionary.class] || ![report[@"points"] isKindOfClass:NSArray.class]) return @[];
+    if (![report[@"metadata"][@"sweep"] isEqual:@"block-stride-v1"]) return @[];
+    NSMutableArray *rows=[NSMutableArray array]; BOOL complete=MBValidReport(report);
+    for (size_t block=32;block<=256;block*=2) {
+        double minimum=INFINITY, maximum=0, sum=0, linear=0; unsigned count=0;
+        for (id point in report[@"points"]) {
+            mb_result r; if (!MBDecodePoint(point,&r) || r.block_bytes!=block) continue;
+            if (r.stride_bytes==block) { linear=mb_result_mean(&r); continue; }
+            minimum=fmin(minimum,r.minimum_gb_per_second); maximum=fmax(maximum,r.maximum_gb_per_second);
+            sum+=mb_result_mean(&r); ++count;
+        }
+        NSMutableDictionary *row=[@{@"block_bytes":@(block),@"measured_steps":@(count),@"unit":@"GB/s"} mutableCopy];
+        if (linear>0) row[@"linear"]=@(linear);
+        if (count) { row[@"minimum"]=@(minimum); row[@"maximum"]=@(maximum); row[@"mean"]=@(sum/count); }
+        if (complete && linear>0 && count==MB_BLOCK_STEPS) row[@"efficiency_percent"]=@(sum/count/linear*100);
+        [rows addObject:row];
+    }
+    return rows;
+}
 static NSString *SafeComment(id value) {
     return [[[value description] componentsSeparatedByCharactersInSet:NSCharacterSet.newlineCharacterSet] componentsJoinedByString:@" "];
 }
@@ -125,9 +166,9 @@ NSString *MBCSV(NSDictionary *report) {
     NSDictionary *meta=report[@"metadata"];
     for (NSString *key in [[meta allKeys] sortedArrayUsingSelector:@selector(compare:)])
         [csv appendFormat:@"# %@: %@\n",key,SafeComment(meta[key])];
-    NSArray *summary=MBRangeSummary(report);
+    NSArray *summary=MBRangeSummary(report), *blocks=MBBlockSummary(report);
     if (summary.count) [csv appendString:@"# relative_speed_percent: mean / fastest mean of the same operation among the five summary buffers * 100, only after a complete sweep; blank for intermediate chart points; not cache hit rate\n"];
-    [csv appendString:@"operation,buffer_bytes,unit,median,minimum,maximum,cv_percent,total_sample_seconds,iterations,samples,sample_1,sample_2,sample_3,sample_4,sample_5,sample_6,sample_7,sample_8,sample_9,mean,relative_speed_percent\n"];
+    [csv appendString:@"operation,buffer_bytes,unit,median,minimum,maximum,cv_percent,total_sample_seconds,iterations,samples,sample_1,sample_2,sample_3,sample_4,sample_5,sample_6,sample_7,sample_8,sample_9,mean,relative_speed_percent,block_bytes,stride_bytes,offset_bytes,linear_reference,block_minimum,block_maximum,block_mean,linear_gb_per_second,efficiency_percent\n"];
     for (NSDictionary *point in report[@"points"]) {
         mb_result r; if (!MBDecodePoint(point,&r)) continue;
         [csv appendFormat:@"%s,%zu,%s,%.9f,%.9f,%.9f,%.6f,%.9f,%llu,%u",
@@ -140,6 +181,14 @@ NSString *MBCSV(NSDictionary *report) {
         for (NSDictionary *row in summary) if ([row[@"buffer_bytes"] unsignedLongLongValue]==r.bytes) {
             NSNumber *percent=row[@(mb_operation_name(r.operation))][@"relative_speed_percent"];
             if (percent) [csv appendFormat:@"%.6f",percent.doubleValue];
+        }
+        [csv appendFormat:@",%zu,%zu,",r.block_bytes,r.stride_bytes];
+        if (r.block_bytes && r.stride_bytes!=r.block_bytes) [csv appendFormat:@"%ld",(long)r.stride_bytes-4096];
+        [csv appendFormat:@",%@",r.block_bytes && r.stride_bytes==r.block_bytes?@"true":@"false"];
+        NSDictionary *blockRow=nil;
+        for (NSDictionary *row in blocks) if ([row[@"block_bytes"] unsignedLongLongValue]==r.block_bytes) blockRow=row;
+        for (NSString *key in @[@"minimum",@"maximum",@"mean",@"linear",@"efficiency_percent"]) {
+            [csv appendString:@","]; if (blockRow[key]) [csv appendFormat:@"%.9f",[blockRow[key] doubleValue]];
         }
         [csv appendString:@"\n"];
     }
