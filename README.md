@@ -33,10 +33,7 @@ AppKit. Реальные измерения, отдельные замеры, с
 
 ## Скачать и открыть приложение
 
-Исходники: **2.1**. Указанный ниже архив пока относится к проверенной сборке 2.0;
-новая сборка будет опубликована после завершения проверок.
-
-[**Скачать Memory Lab 2.0 — готовое приложение для Mac**](https://github.com/uglymodez/BEnchMark/blob/main/downloads/MemoryLab-Universal.zip).
+[**Скачать Memory Lab 2.1 — готовое приложение для Mac**](https://github.com/uglymodez/BEnchMark/blob/main/downloads/MemoryLab-Universal.zip).
 
 1. Открой ссылку и нажми **Download raw file** (значок скачивания). Репозиторий
    приватный: нужно войти в свой GitHub.
@@ -49,10 +46,12 @@ AppKit. Реальные измерения, отдельные замеры, с
 разработки. После успешной сборки готовое приложение также лежит в
 `build/Memory Benchmark.app`; его тоже можно перенести в «Программы».
 
-Архив содержит universal-приложение 2.0 для **Apple Silicon и Intel, macOS 12+**.
-Он получен из [успешного CI run 43893240213](https://github.com/uglymodez/BEnchMark/actions/runs/43893240213):
-на macOS Intel прошли тесты, проверка подписи и запуск интерфейса.
-Исходное дерево совпадает с объединённой версией 2.0. Финальный ARM64-код
+Архив содержит universal-приложение 2.1 для **Apple Silicon и Intel, macOS 12+**.
+Он получен из [успешного CI run 44034453069](https://github.com/uglymodez/BEnchMark/actions/runs/44034453069):
+на macOS Intel прошли тесты, проверка подписи, два latency-прогона и два
+прогона пяти диапазонов с восстановлением эталона. CSV/JSON сверены
+с исходными замерами; светлая и тёмная темы просмотрены.
+Исходное дерево совпадает с объединённой версией 2.1. Финальный ARM64-код
 скомпилирован, но его запуск на M5 этим прогоном не проверен.
 [Контрольные суммы](downloads/SHA256SUMS.txt) ·
 [Происхождение сборки](downloads/MemoryLab-Universal.provenance.json).
@@ -84,7 +83,7 @@ bash build.sh
 В universal-приложении macOS сама выбирает нужную архитектуру.
 
 **Архив `downloads/MemoryBenchmark-Mac.zip` — старая версия 1.0.**
-Готовая версия 2.0 находится в `downloads/MemoryLab-Universal.zip` по ссылке выше.
+Готовая версия 2.1 находится в `downloads/MemoryLab-Universal.zip` по ссылке выше.
 Архивы не пересобираются автоматически при изменении исходников; проверяй
 версию и происхождение сборки. Для разработки остаётся workflow
 `Memory Lab validation`, создающий артефакт `MemoryLab-Universal`.
