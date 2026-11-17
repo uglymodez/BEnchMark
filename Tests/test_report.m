@@ -63,7 +63,7 @@ int main(void) {
         NSUInteger row=0;
         for (NSString *line in lines) if ([line hasPrefix:@"read,"] || [line hasPrefix:@"write,"]) {
             NSArray *fields=[line componentsSeparatedByString:@","];
-            assert(fields.count==50);
+            assert(fields.count==54);
             NSString *op=fields[0]; NSDictionary *value=summary[row/2][op];
             assert(fabs([fields[19] doubleValue]-[value[@"mean"] doubleValue])<1e-8);
             assert(fabs([fields[20] doubleValue]-[value[@"relative_speed_percent"] doubleValue])<1e-5);
@@ -110,7 +110,7 @@ int main(void) {
         NSUInteger csvCount=0, percentCount=0;
         for (NSString *line in [MBCSV(ranges) componentsSeparatedByString:@"\n"]) if ([line hasPrefix:@"read,"] || [line hasPrefix:@"write,"]) {
             NSArray *fields=[line componentsSeparatedByString:@","];
-            assert(fields.count==50); ++csvCount;
+            assert(fields.count==54); ++csvCount;
             if ([fields[20] length]) ++percentCount;
             else assert([fields[19] doubleValue]==1000);
         }
@@ -169,6 +169,23 @@ int main(void) {
         assert(mb_measure_blocks(ctx,MB_READ,65536,64,4096,.001,3,&r)==MB_OK);
         NSDictionary *blockAudit=MBPointRecord(r); assert(MBDecodePoint(blockAudit,&restored));
         assert(restored.work_units_per_iteration==1024);
+        // A timed-warmup report must carry valid, separate warmup evidence.
+        NSMutableDictionary *warmMeta=[auditMeta mutableCopy]; warmMeta[@"measurement_protocol"]=@"timing-warmup-v2";
+        NSDictionary *warmReport=@{@"schema_version":@2,@"metadata":warmMeta,@"points":@[point]};
+        assert(MBValidReport(warmReport));
+        assert(!MBComparable(warmMeta,auditMeta) && !MBComparable(auditMeta,warmMeta));
+        assert([MBTimingDescription(warmReport) containsString:@"Прогрев:"]);
+        tampered=[point mutableCopy]; tampered[@"warmup_seconds"]=@0;
+        assert(!MBDecodePoint(tampered,&restored));
+        tampered=[point mutableCopy]; tampered[@"warmup_iterations"]=@1.5;
+        assert(!MBDecodePoint(tampered,&restored));
+        tampered=[point mutableCopy]; tampered[@"sample_drift_percent"]=@123456;
+        assert(!MBDecodePoint(tampered,&restored));
+        tampered=[point mutableCopy];
+        for (NSString *key in @[@"warmup_target_seconds",@"warmup_seconds",@"warmup_iterations"]) [tampered removeObjectForKey:key];
+        assert(MBDecodePoint(tampered,&restored));
+        assert(MBValidReport(@{@"schema_version":@2,@"metadata":auditMeta,@"points":@[tampered]}));
+        assert(!MBValidReport(@{@"schema_version":@2,@"metadata":warmMeta,@"points":@[tampered]}));
         mb_destroy(ctx); puts("PASS: JSON round trip, malformed reports, comparison compatibility, CSV units");
     }
 }

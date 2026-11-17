@@ -298,6 +298,17 @@ static mb_status prepare_code(mb_context *ctx, size_t n) {
     return mb_is_cancelled(ctx) ? MB_CANCELLED : MB_OK;
 }
 
+double mb_warmup_duration(double seconds) {
+    return fmin(0.300,fmax(0.100,6*seconds));
+}
+double mb_result_drift_percent(const mb_result *r) {
+    if (!r || r->samples<3 || r->samples>MB_MAX_SAMPLES) return 0;
+    unsigned half=r->samples/2; double first=0,last=0;
+    for (unsigned i=0;i<half;++i) {
+        first+=r->sample_values[i]; last+=r->sample_values[r->samples-half+i];
+    }
+    return first>0?(last/first-1)*100:0;
+}
 static void one_pass(mb_context *ctx, mb_operation op, size_t n) {
     if (op == MB_READ) ctx->sink ^= read_pass(ctx->data, n);
     else if (op == MB_WRITE) write_pass(ctx->data, n);
@@ -334,7 +345,10 @@ mb_status mb_measure(mb_context *ctx, mb_operation op, size_t n,
        large working sets check cancellation between individual passes. */
     size_t batch = (1024*1024)/n;
     if (batch < 1) batch = 1;
-    for (unsigned s=0; s<count; ++s) {
+    out->warmup_target_seconds=mb_warmup_duration(duration);
+    for (unsigned phase=0; phase<=count; ++phase) {
+        unsigned s=phase?phase-1:0;
+        double target=phase?duration:out->warmup_target_seconds;
         if (mb_is_cancelled(ctx)) return MB_CANCELLED;
         uint64_t passes = 0; double start = now(), elapsed;
         do {
@@ -343,9 +357,13 @@ mb_status mb_measure(mb_context *ctx, mb_operation op, size_t n,
             if (op == MB_WRITE) finish_stores();
             elapsed = now()-start;
             if (mb_is_cancelled(ctx)) return MB_CANCELLED;
-        } while (elapsed < duration);
+        } while (elapsed < target);
         if (elapsed <= 0 || !isfinite(elapsed)) {
             problem(ctx, "Invalid clock measurement."); return MB_ERROR;
+        }
+        if (!phase) {
+            out->warmup_seconds=elapsed; out->warmup_iterations=passes;
+            continue;
         }
         rates[s] = op == MB_LATENCY ? elapsed * 1e9 / (double)passes :
                    ((double)n * (double)passes) / elapsed / 1e9;
@@ -416,7 +434,10 @@ mb_status mb_measure_blocks(mb_context *ctx, mb_operation op, size_t n,
     size_t useful=((n-block)/stride+1)*block;
     size_t batch=(1024*1024)/useful; if (batch<1) batch=1;
     double values[MB_MAX_SAMPLES],seconds=0; uint64_t total=0;
-    for (unsigned s=0;s<count;++s) {
+    out->warmup_target_seconds=mb_warmup_duration(duration);
+    for (unsigned phase=0;phase<=count;++phase) {
+        unsigned s=phase?phase-1:0;
+        double target=phase?duration:out->warmup_target_seconds;
         double start=now(),elapsed; uint64_t passes=0;
         do {
             if (mb_is_cancelled(ctx)) return MB_CANCELLED;
@@ -424,7 +445,12 @@ mb_status mb_measure_blocks(mb_context *ctx, mb_operation op, size_t n,
             passes+=batch;
             if (op==MB_WRITE) finish_stores();
             elapsed=now()-start;
-        } while (elapsed<duration);
+        } while (elapsed<target);
+        if (elapsed<=0 || !isfinite(elapsed)) { problem(ctx,"Invalid clock measurement."); return MB_ERROR; }
+        if (!phase) {
+            out->warmup_seconds=elapsed; out->warmup_iterations=passes;
+            continue;
+        }
         out->sample_seconds[s]=elapsed; out->sample_iterations[s]=passes;
         values[s]=(double)useful*passes/elapsed/1e9; seconds+=elapsed; total+=passes;
     }

@@ -8,6 +8,8 @@
 
 static void verify_timing(mb_result r) {
     assert(r.work_units_per_iteration>0);
+    assert(r.warmup_target_seconds>=.1 && r.warmup_target_seconds<=.3);
+    assert(r.warmup_seconds>=r.warmup_target_seconds && r.warmup_iterations>0);
     uint64_t iterations=0; double seconds=0;
     for (unsigned i=0;i<r.samples;++i) {
         assert(r.sample_seconds[i]>0 && r.sample_iterations[i]>0);
@@ -22,6 +24,17 @@ static void *cancel_later(void *p) {
     struct timespec delay={0,20000000}; nanosleep(&delay,NULL); mb_cancel(p); return NULL;
 }
 int main(void) {
+    assert(mb_warmup_duration(.015)==.1);
+    assert(fabs(mb_warmup_duration(.035)-.21)<1e-12);
+    assert(mb_warmup_duration(.06)==.3 && mb_warmup_duration(1)==.3);
+    mb_result drift={.samples=5,.sample_values={100,100,999,80,60}};
+    assert(fabs(mb_result_drift_percent(&drift)+30)<1e-12);
+    drift=(mb_result){.samples=3,.sample_values={100,999,125}};
+    assert(mb_result_drift_percent(&drift)==25);
+    drift=(mb_result){.samples=4,.sample_values={100,120,110,110}};
+    assert(mb_result_drift_percent(&drift)==0);
+    drift.samples=2; assert(mb_result_drift_percent(&drift)==0);
+    assert(mb_result_drift_percent(NULL)==0);
     size_t sizes[80];
     size_t count=mb_sizes(64*1024*1024,sizes,80);
     assert(count==57 && sizes[0]==4096 && sizes[count-1]==64*1024*1024);
@@ -110,7 +123,7 @@ int main(void) {
     flag=0; mb_set_cancel_flag(ctx,NULL);
     pthread_t worker; assert(pthread_create(&worker,NULL,cancel_later,ctx)==0);
     assert(mb_measure(ctx,MB_READ,4096,0.2,9,&r)==MB_CANCELLED);
-    pthread_join(worker,NULL);
+    pthread_join(worker,NULL); assert(r.samples==0 && r.passes==0);
     assert(mb_measure(ctx,MB_WRITE,4096,0.002,3,&r)==MB_CANCELLED);
     mb_destroy(ctx);
     ctx=mb_create(); assert(ctx);
@@ -133,7 +146,7 @@ int main(void) {
     assert(mb_measure_blocks(ctx,MB_READ,65536,32,1024,NAN,3,&r)==MB_ERROR);
     assert(pthread_create(&worker,NULL,cancel_later,ctx)==0);
     assert(mb_measure_blocks(ctx,MB_WRITE,65536,128,4096,.2,9,&r)==MB_CANCELLED);
-    pthread_join(worker,NULL); mb_destroy(ctx);
+    pthread_join(worker,NULL); assert(r.samples==0 && r.passes==0); mb_destroy(ctx);
     puts("PASS: sweep, four workloads, raw samples, statistics, mapping reuse, cancellation");
     return 0;
 }
