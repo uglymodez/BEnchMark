@@ -1,16 +1,16 @@
 {
   "application": "Memory Lab for Mac",
-  "version": "2.4",
+  "version": "2.5",
   "archive": "MemoryLab-Universal.zip",
-  "archive_sha256": "3eeffc4d7f6051335c97fdbfe53ac181ebb82b1b054496d29f9c8fb1effd112d",
+  "archive_sha256": "867381ce0a41cefcbae8b02876cd495231131f3b658c589df941c5ecf0f2f914",
   "repository": "uglymodez/BEnchMark",
-  "workflow_run_id": 44065899333,
-  "workflow_run_url": "https://github.com/uglymodez/BEnchMark/actions/runs/44065899333",
-  "artifact_id": 14320467070,
-  "artifact_sha256": "89f97338ea68bb0d4b0b16eaab615f98b59b7e47b47797a4849d854296b6460a",
-  "source_commit": "14b1d4bb166f7d5831738931f0e0e373b054a8c1",
-  "merge_commit": "feadb3b380824d45ee18721e409a2f32975214f4",
-  "source_tree": "8113c0cee6cd0cba2a915e943fb2584d55916784",
+  "workflow_run_id": 44144590632,
+  "workflow_run_url": "https://github.com/uglymodez/BEnchMark/actions/runs/44144590632",
+  "artifact_id": 14357500081,
+  "artifact_sha256": "147735c3143d806af0fbbe4ec54d826e3073a862ff121e8924d9a41092e70a99",
+  "source_commit": "5964f65aac4451eff5d8a0a0fba1275b26d108d0",
+  "merge_commit": "d3c5ecf6694fb8d8fad2939603c630ffd37a3a19",
+  "source_tree": "e5307bd06f028edb9bf9da5d3ff5653c03063256",
   "architectures": [
     "arm64",
     "x86_64"
@@ -25,7 +25,8 @@
     "live_tab_navigation_and_cancel_from_about": "passed",
     "raw_measurements_window": "passed",
     "independent_timing_recomputation": "passed: two runs per mode; 450 ranges, 57 latency, 168 read, 168 write points per run; JSON/CSV checked",
-    "native_arm64_latest_run": "skipped"
+    "native_arm64_latest_run": "skipped",
+    "warmup_and_sample_drift": "passed: raw counters, elapsed warmup, target and drift independently verified in both runs of all four modes"
   },
   "packaging": "Unmodified inner archive from GitHub Actions artifact"
 }
