@@ -1,5 +1,6 @@
 #import "report.h"
 #include <assert.h>
+#include <math.h>
 int main(void) {
     @autoreleasepool {
         mb_context *ctx=mb_create(); assert(ctx); mb_result r, restored;
@@ -34,6 +35,60 @@ int main(void) {
         broken[@"iterations"]=@(0x1p64); assert(!MBDecodePoint(broken,&restored));
         NSString *csv=MBCSV(report); assert([csv containsString:@"latency,4096,ns/load,"]);
         assert([csv containsString:@"sample_9"]);
+        // Different fastest buffers for reading and writing; mean != median.
+        NSMutableDictionary *rangeMeta=[meta mutableCopy];
+        rangeMeta[@"mode"]=@"Memory Ranges"; rangeMeta[@"sweep"]=@"compact-5-v1";
+        rangeMeta[@"maximum_bytes"]=@(64*1024*1024);
+        size_t sizes[5]; assert(mb_compact_sizes(64*1024*1024,sizes,5)==5);
+        NSMutableArray *rangePoints=[NSMutableArray array];
+        for (unsigned i=0;i<5;++i) for (int op=0;op<2;++op) {
+            double scale=op==MB_READ?i+1:10-i;
+            mb_result value={.bytes=sizes[i],.operation=(mb_operation)op,.samples=3,.seconds=.01,.passes=30,
+                .sample_values={scale,2*scale,9*scale}};
+            [rangePoints addObject:MBPointRecord(value)];
+        }
+        NSMutableDictionary *ranges=[@{@"schema_version":@2,@"metadata":rangeMeta,@"points":rangePoints} mutableCopy];
+        assert(MBValidReport(ranges)); assert(MBComparable(rangeMeta,rangeMeta));
+        assert(!MBComparable(meta,rangeMeta));
+        NSArray *summary=MBRangeSummary(ranges); assert(summary.count==5);
+        for (unsigned i=0;i<5;++i) {
+            NSDictionary *read=summary[i][@"read"], *write=summary[i][@"write"];
+            assert([read[@"mean"] doubleValue]==4*(i+1));
+            assert([read[@"minimum"] doubleValue]==i+1 && [read[@"maximum"] doubleValue]==9*(i+1));
+            assert(fabs([read[@"relative_speed_percent"] doubleValue]-20*(i+1))<1e-9);
+            assert(fabs([write[@"relative_speed_percent"] doubleValue]-(10-i)*10)<1e-9);
+        }
+        NSString *rangesCSV=MBCSV(ranges);
+        NSArray *lines=[rangesCSV componentsSeparatedByString:@"\n"];
+        NSUInteger row=0;
+        for (NSString *line in lines) if ([line hasPrefix:@"read,"] || [line hasPrefix:@"write,"]) {
+            NSArray *fields=[line componentsSeparatedByString:@","];
+            assert(fields.count==21);
+            NSString *op=fields[0]; NSDictionary *value=summary[row/2][op];
+            assert(fabs([fields[19] doubleValue]-[value[@"mean"] doubleValue])<1e-8);
+            assert(fabs([fields[20] doubleValue]-[value[@"relative_speed_percent"] doubleValue])<1e-5);
+            ++row;
+        }
+        assert(row==10);
+        ranges[@"range_summary"]=summary;
+        NSData *rangeJSON=[NSJSONSerialization dataWithJSONObject:ranges options:0 error:nil];
+        NSDictionary *roundtrip=[NSJSONSerialization JSONObjectWithData:rangeJSON options:0 error:nil];
+        assert([MBRangeSummary(roundtrip) isEqual:summary]);
+        // Never trust persisted mean or normalize an incomplete run.
+        NSMutableDictionary *forged=[rangePoints[0] mutableCopy]; forged[@"mean"]=@999;
+        assert(MBDecodePoint(forged,&restored) && mb_result_mean(&restored)==4);
+        rangeMeta[@"complete"]=@NO; assert(!MBValidReport(ranges));
+        for (NSDictionary *entry in MBRangeSummary(ranges)) assert(!entry[@"read"][@"relative_speed_percent"]);
+        assert([MBCSV(ranges) containsString:@",4.000000000,\n"]);
+        rangeMeta[@"complete"]=@YES;
+        ranges[@"points"]=[rangePoints subarrayWithRange:NSMakeRange(0,9)]; assert(!MBValidReport(ranges));
+        for (NSDictionary *entry in MBRangeSummary(ranges)) assert(!entry[@"write"][@"relative_speed_percent"]);
+        NSMutableArray *duplicates=[rangePoints mutableCopy]; duplicates[1]=duplicates[0];
+        ranges[@"points"]=duplicates; assert(!MBValidReport(ranges));
+        ranges[@"points"]=rangePoints; rangeMeta[@"sweep"]=@"wrong"; assert(!MBValidReport(ranges));
+        assert(!MBComparable(rangeMeta,rangeMeta));
+        assert(MBRangeSummary(@{}).count==0);
         mb_destroy(ctx); puts("PASS: JSON round trip, malformed reports, comparison compatibility, CSV units");
     }
 }
+

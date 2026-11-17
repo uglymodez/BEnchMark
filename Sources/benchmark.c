@@ -79,6 +79,19 @@ const char *mb_architecture(void) {
 }
 const char *mb_method_version(void) { return "MBM-2.0"; }
 
+double mb_result_mean(const mb_result *r) {
+    mb_statistics stats;
+    return r && mb_summarize(r->sample_values,r->samples,&stats) ? stats.mean : 0;
+}
+
+size_t mb_compact_sizes(size_t maximum, size_t *sizes, size_t capacity) {
+    if (!sizes || capacity<5 || maximum<64UL*1024*1024 ||
+        maximum>1024UL*1024*1024 || maximum%256) return 0;
+    const size_t fixed[]={4096,64*1024,1024*1024,16*1024*1024};
+    memcpy(sizes,fixed,sizeof(fixed)); sizes[4]=maximum;
+    return 5;
+}
+
 const char *mb_operation_name(mb_operation op) {
     switch (op) {
         case MB_READ: return "read";
@@ -355,4 +368,5 @@ size_t mb_sizes(size_t max, size_t *sizes, size_t capacity) {
     if (capacity<count) return 0;
     memcpy(sizes,values,count*sizeof(size_t)); return count;
 }
+
 
