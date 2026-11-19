@@ -43,6 +43,28 @@ static NSString *BitSize(uint64_t bytes) {
     return bits<1e6 ? [NSString stringWithFormat:@"%.6g KB",bits/1e3]
                     : [NSString stringWithFormat:@"%.6g MB",bits/1e6];
 }
+// Pick major grid spacing from the decimal series 1, 2, 5, 10, ... .
+static double MajorStep(double requested) {
+    double power=pow(10,floor(log10(requested)));
+    for (unsigned k=0;k<3;k++) {
+        double candidate=((double[]){1,2,5})[k]*power;
+        if (candidate>=requested) return candidate;
+    }
+    return 10*power;
+}
+static NSString *TickNumber(double value) {
+    static NSNumberFormatter *formatter;
+    static dispatch_once_t once;
+    dispatch_once(&once, ^{
+        formatter=[NSNumberFormatter new];
+        formatter.locale=[NSLocale localeWithLocaleIdentifier:@"ru_RU"];
+        formatter.numberStyle=NSNumberFormatterDecimalStyle;
+        formatter.maximumFractionDigits=3;
+        formatter.minimumFractionDigits=0;
+        formatter.groupingSeparator=@" ";
+    });
+    return [formatter stringFromNumber:@(value)];
+}
 static NSArray<NSDictionary *> *CacheRecords(void) {
     NSArray *fields=@[@"l1icachesize",@"l1dcachesize",@"l2cachesize",@"l3cachesize"];
     NSArray *labels=@[@"L1I",@"L1D",@"L2",@"L3"];
@@ -155,6 +177,34 @@ static NSTextField *Label(NSString *text, CGFloat size, NSFontWeight weight, NSC
 - (NSPoint)position:(mb_result)r value:(double)value plot:(NSRect)plot high:(double)high {
     return NSMakePoint(plot.origin.x+plot.size.width*log2((double)r.bytes/4096)/fmax(1,log2((double)self.maximum/4096)),NSMaxY(plot)-plot.size.height*value/high);
 }
+// Returned ceiling is also used to position points, envelopes and the baseline.
+- (double)drawValueAxis:(NSRect)plot ceiling:(double)ceiling grid:(NSColor *)grid {
+    NSUInteger desired=MAX(2,MIN(10,(NSInteger)(NSHeight(plot)/25)));
+    double step=MajorStep(ceiling/desired);
+    NSInteger count=(NSInteger)ceil(ceiling/step);
+    double high=count*step;
+    for (NSInteger half=0;half<=count*2;half++) {
+        CGFloat y=NSMaxY(plot)-NSHeight(plot)*half/(count*2);
+        BOOL major=half%2==0;
+        [[grid colorWithAlphaComponent:major?.85:.45] setStroke];
+        NSBezierPath *line=[NSBezierPath bezierPath];
+        [line moveToPoint:NSMakePoint(NSMinX(plot),y)]; [line lineToPoint:NSMakePoint(NSMaxX(plot),y)];
+        line.lineWidth=major?.8:.5; [line stroke];
+        if (major) [self text:TickNumber(step*(half/2)) at:NSMakePoint(5,y-7) color:NSColor.lightGrayColor size:10];
+    }
+    return high;
+}
+- (void)drawXTick:(CGFloat)x plot:(NSRect)plot label:(NSString *)label grid:(NSColor *)grid lastLabelEdge:(CGFloat *)edge {
+    NSBezierPath *line=[NSBezierPath bezierPath];
+    [line moveToPoint:NSMakePoint(x,NSMinY(plot))]; [line lineToPoint:NSMakePoint(x,NSMaxY(plot))];
+    [[grid colorWithAlphaComponent:label?.85:.45] setStroke]; line.lineWidth=label?.8:.5; [line stroke];
+    if (!label) return;
+    CGFloat width=[label sizeWithAttributes:@{NSFontAttributeName:[NSFont monospacedSystemFontOfSize:10 weight:NSFontWeightRegular]}].width;
+    CGFloat left=MIN(x-width/2,NSWidth(self.bounds)-width-4);
+    if (left<*edge+6) return;
+    [self text:label at:NSMakePoint(left,NSMaxY(plot)+7) color:NSColor.lightGrayColor size:10];
+    *edge=left+width;
+}
 - (void)drawBlocks {
     [NSColor.blackColor setFill]; NSRectFill(self.bounds);
     CGFloat w=self.bounds.size.width,h=self.bounds.size.height;
@@ -164,17 +214,12 @@ static NSTextField *Label(NSString *text, CGFloat size, NSFontWeight weight, NSC
     double high=1;
     for (NSArray *series in @[self.points,self.baseline ?: @[]]) for (MBPoint *p in series)
         { mb_result r=p.result; if (r.stride_bytes!=r.block_bytes) high=fmax(high,mb_result_maximum(&r)*1000*1.1); }
-    for (int j=0;j<=10;++j) {
-        CGFloat y=NSMaxY(plot)-plot.size.height*j/10;
-        NSBezierPath *path=[NSBezierPath bezierPath]; [path moveToPoint:NSMakePoint(plot.origin.x,y)]; [path lineToPoint:NSMakePoint(NSMaxX(plot),y)];
-        [grid setStroke]; path.lineWidth=.6; [path stroke];
-        [self text:[NSString stringWithFormat:@"%.0f",high*j/10] at:NSMakePoint(4,y-6) color:NSColor.lightGrayColor size:10];
-    }
-    for (int i=0;i<=40;++i) {
-        CGFloat x=plot.origin.x+plot.size.width*i/40;
-        NSBezierPath *path=[NSBezierPath bezierPath]; [path moveToPoint:NSMakePoint(x,plot.origin.y)]; [path lineToPoint:NSMakePoint(x,NSMaxY(plot))];
-        [grid setStroke]; path.lineWidth=.5; [path stroke];
-        if (i%4==0) [self text:[NSString stringWithFormat:@"%.3f",(i/4+1)*8.192] at:NSMakePoint(MIN(x-15,w-47),NSMaxY(plot)+9) color:NSColor.lightGrayColor size:11];
+    high=[self drawValueAxis:plot ceiling:high grid:grid];
+    const double minKB=1024*8.0/1000, maxKB=11264*8.0/1000;
+    CGFloat edge=0;
+    for (int kb=10;kb<=maxKB;kb+=5) {
+        CGFloat x=NSMinX(plot)+NSWidth(plot)*(kb-minKB)/(maxKB-minKB);
+        [self drawXTick:x plot:plot label:kb%10==0?TickNumber(kb):nil grid:grid lastLabelEdge:&edge];
     }
     CGFloat dash[]={3,4};
     [self text:self.mode==1?@"ЧТЕНИЕ БЛОКА":@"ЗАПИСЬ БЛОКА" at:NSMakePoint(18,16) color:NSColor.whiteColor size:12];
@@ -264,23 +309,21 @@ static NSTextField *Label(NSString *text, CGFloat size, NSFontWeight weight, NSC
     double high=1;
     for (NSArray *series in @[self.points,self.baseline ?: @[]])
         for (MBPoint *p in series) { mb_result r=p.result; high=fmax(high,(series==self.points?mb_result_maximum(&r):(self.mode==0?mb_result_mean(&r):mb_result_value(&r)))*1.12); }
-    double magnitude=pow(10,floor(log10(high/5))), step=ceil(high/5/magnitude)*magnitude; high=step*5;
-    NSColor *grid=[NSColor colorWithRed:0 green:0.55 blue:0.55 alpha:1], *muted=[NSColor colorWithWhite:0.8 alpha:1];
-    double maxLog=fmax(1,log2((double)self.maximum/4096));
-    for (int j=0;j<=20;++j) {
-        CGFloat y=plot.origin.y+plot.size.height*(1-j/20.0);
-        NSBezierPath *line=[NSBezierPath bezierPath];
-        [line moveToPoint:NSMakePoint(plot.origin.x,y)]; [line lineToPoint:NSMakePoint(NSMaxX(plot),y)];
-        [[grid colorWithAlphaComponent:j%2==0?0.85:0.45] setStroke]; line.lineWidth=j%2==0?0.8:0.5; [line stroke];
-        if (j%2==0) [self text:[NSString stringWithFormat:@"%5.1f",j*step/4] at:NSMakePoint(5,y-7) color:muted size:10];
-    }
-    int labelStride=MAX(1,(int)ceil((maxLog+1)*84/plot.size.width));
-    for (int k=0;k<=maxLog*4;++k) {
-        CGFloat x=plot.origin.x+plot.size.width*k/(maxLog*4);
-        NSBezierPath *line=[NSBezierPath bezierPath];
-        [line moveToPoint:NSMakePoint(x,plot.origin.y)]; [line lineToPoint:NSMakePoint(x,NSMaxY(plot))];
-        [[grid colorWithAlphaComponent:k%4==0?0.85:0.45] setStroke]; line.lineWidth=k%4==0?0.8:0.5; [line stroke];
-        if (k%(4*labelStride)==0) [self text:BitSize((uint64_t)4096<<(k/4)) at:NSMakePoint(MIN(x-19,w-66),NSMaxY(plot)+7) color:muted size:10];
+    NSColor *grid=[NSColor colorWithRed:0 green:.55 blue:.55 alpha:1], *muted=[NSColor colorWithWhite:.8 alpha:1];
+    high=[self drawValueAxis:plot ceiling:high grid:grid];
+    const double minKB=4096*8.0/1000, maxKB=self.maximum*8.0/1000;
+    CGFloat edge=0;
+    for (double decade=10;decade<=maxKB;decade*=10) {
+        for (int digit=1;digit<=9;digit++) {
+            double kb=digit*decade;
+            if (kb<minKB || kb>maxKB) continue;
+            CGFloat x=NSMinX(plot)+NSWidth(plot)*log2(kb/minKB)/log2(maxKB/minKB);
+            NSString *label=nil;
+            if (digit==1 || digit==2 || digit==5) {
+                label=[NSString stringWithFormat:@"%@ %@",TickNumber(kb<1000?kb:kb/1000),kb<1000?@"KB":@"MB"];
+            }
+            [self drawXTick:x plot:plot label:label grid:grid lastLabelEdge:&edge];
+        }
     }
     [self text:self.mode==3?@"Y · Задержка, нс/чтение":@"Y · Скорость, GB/s (гигабайт/с)" at:NSMakePoint(12,57) color:muted size:10];
     [self text:@"X · Размер буфера, KB / MB (килобиты / мегабиты) · log₂" at:NSMakePoint(w-360,h-17) color:muted size:9];
@@ -423,7 +466,7 @@ static NSTextField *Label(NSString *text, CGFloat size, NSFontWeight weight, NSC
     self.content.autoresizingMask=NSViewWidthSizable|NSViewHeightSizable;
     self.window.contentView=self.content; MBContent *v=self.content;
     NSColor *dark=NSColor.labelColor, *muted=[NSColor secondaryLabelColor];
-    v.titleLabel=Label(@"Memory Lab  /  2.6",27,NSFontWeightSemibold,dark);
+    v.titleLabel=Label(@"Memory Lab  /  2.7",27,NSFontWeightSemibold,dark);
     NSString *cpu=SysString("machdep.cpu.brand_string"); if (!cpu.length) cpu=SysString("hw.model");
     NSString *translation=SysNumber("sysctl.proc_translated")?@" · Rosetta: пересобери под arm64":@" · native";
     v.machineLabel=Label([NSString stringWithFormat:@"%@  ·  %@ RAM  ·  %@%@  ·  macOS %@",cpu,SizeLabel(NSProcessInfo.processInfo.physicalMemory),[NSString stringWithUTF8String:mb_architecture()],translation,NSProcessInfo.processInfo.operatingSystemVersionString],12,NSFontWeightMedium,dark);
@@ -475,7 +518,7 @@ static NSTextField *Label(NSString *text, CGFloat size, NSFontWeight weight, NSC
     about.minSize=NSZeroSize; about.maxSize=NSMakeSize(CGFLOAT_MAX,CGFLOAT_MAX);
     about.textContainer.containerSize=NSMakeSize(936,CGFLOAT_MAX);
     about.textContainer.widthTracksTextView=YES;
-    NSString *guide=@"Как выполняется тест\nПрограмма выделяет буфер в оперативной памяти и заранее заполняет его. Видео, файлы, накопитель, сеть и GPU в нагрузке не участвуют. Один поток CPU повторяет заданную операцию с буфером. Перед серией он выполняет ту же нагрузку 100–300 мс. Прогрев учитывается отдельно.\n\nКэш · 5 размеров\nДля каждого рабочего набора от 4 KiB до выбранного максимума процессор последовательно читает буфер и отдельно записывает его. Это 128-битные операции NEON на Apple Silicon или SSE2 на Intel. Барьер завершает пакет записей. Для каждого повтора скорость равна размеру буфера × числу полных проходов / времени. График соединяет средние по всем размерам. Полоса показывает минимум и максимум. Таблица сравнивает пять выбранных размеров, отдельно для чтения и записи.\n\nКак читать график\nОсь X показывает размер буфера в битах по логарифмической шкале. В обозначениях этой программы KB — килобит (1000 бит), MB — мегабит (1 000 000 бит). Один байт равен 8 битам. Например, 64 KiB = 65 536 байт = 524,288 KB. В настройках KiB и MiB обозначают двоичные единицы байтов. На оси Y скорость в GB/s — миллиардах байтов в секунду.\n\nВертикальные штрихи указывают ёмкости L1D, L2 и L3, о которых сообщает macOS. L1I и L1D — части одного уровня L1. L1I хранит инструкции. L2 может быть общим для группы ядер. Совпадающие ёмкости имеют одну отметку. macOS выбирает ядро во время теста.\n\nСтрелки ↑ и ↓ показывают самый большой рост и спад средней скорости чтения при примерно двукратном увеличении буфера. Отметка ставится в конце интервала, если изменение достигло 10% и диапазоны min–max двух точек не пересекаются. Причину изменения по одной кривой установить нельзя. Цветной пунктир вдоль кривой показывает сохранённый эталон.\n\nRead RAM и Write RAM\nВ буфере фиксированного размера процессор читает или записывает блоки по 32, 64, 128 и 256 байт. По оси X меняется шаг между началами блоков (1–11 KiB, подписан в килобитах). Скорость по оси Y выражена в мегабайтах/с. Учитываются только байты обработанных блоков. Эффективность сравнивает среднюю скорость с отдельным последовательным проходом.\n\nLatency\nКаждое чтение указателя даёт адрес следующего элемента случайной цепочки. Ось X показывает размер рабочего набора, ось Y — наносекунды на чтение. График показывает медиану.\n\nПроверка результатов\nЩёлкни точку и открой «Исходные замеры» для проверки каждого повтора. Тест выполняет 3, 5 или 9 повторов в зависимости от профиля. Предупреждение появляется при CV выше 5% или изменении между половинами серии более 10%. Питание, нагрузка и выбор ядра могут влиять на результат. Эталон сравнивает прогоны с одинаковыми настройками. Экспорт JSON/CSV содержит исходные байты, длительности, проходы и единицы скорости. Частичный прогон можно экспортировать.\n";
+    NSString *guide=@"Как выполняется тест\nПрограмма выделяет буфер в оперативной памяти и заранее заполняет его. Видео, файлы, накопитель, сеть и GPU в нагрузке не участвуют. Один поток CPU повторяет заданную операцию с буфером. Перед серией он выполняет ту же нагрузку 100–300 мс. Прогрев учитывается отдельно.\n\nКэш · 5 размеров\nДля каждого рабочего набора от 4 KiB до выбранного максимума процессор последовательно читает буфер и отдельно записывает его. Это 128-битные операции NEON на Apple Silicon или SSE2 на Intel. Барьер завершает пакет записей. Для каждого повтора скорость равна размеру буфера × числу полных проходов / времени. График соединяет средние по всем размерам. Полоса показывает минимум и максимум. Таблица сравнивает пять выбранных размеров, отдельно для чтения и записи.\n\nКак читать график\nОсь X показывает размер буфера в битах по логарифмической шкале. В обозначениях этой программы KB — килобит (1000 бит), MB — мегабит (1 000 000 бит). Один байт равен 8 битам. Например, 64 KiB = 65 536 байт = 524,288 KB. В настройках KiB и MiB обозначают двоичные единицы байтов. На оси Y скорость в GB/s — миллиардах байтов в секунду.\n\nВертикальные штрихи указывают ёмкости L1D, L2 и L3, о которых сообщает macOS. L1I и L1D — части одного уровня L1. L1I хранит инструкции. L2 может быть общим для группы ядер. Совпадающие ёмкости имеют одну отметку. macOS выбирает ядро во время теста.\n\nСтрелки ↑ и ↓ показывают самый большой рост и спад средней скорости чтения при примерно двукратном увеличении буфера. Отметка ставится в конце интервала, если изменение достигло 10% и диапазоны min–max двух точек не пересекаются. Причину изменения по одной кривой установить нельзя. Цветной пунктир вдоль кривой показывает сохранённый эталон.\n\nRead RAM и Write RAM · блочный доступ с постоянным шагом (strided access)\nПараметр «До» задаёт размер буфера. Цвет линии задаёт размер блока: 32, 64, 128 или 256 байт. Для каждой точки шаг S фиксирован. Поток обрабатывает полные блоки, начиная со смещений 0, S, 2S и далее до конца буфера. Для следующей точки шаг меняется: от 1024 до 11 264 байт с приращением 256 байт (41 шаг). Координаты точек и подписи оси X выражают одно и то же расстояние в килобитах.\n\nНапример, для блока 64 байта и шага 1024 байта используются диапазоны 0–63, 1024–1087, 2048–2111 и так далее. Внутри блока процессор обращается к 16 байтам за операцию. При чтении он объединяет значения операцией XOR; при записи помещает фиксированный шаблон и выполняет барьер в конце пакета проходов. В буфере 64 MiB такой проход обрабатывает 65 536 блоков, то есть 4 MiB полезных данных.\n\nПосле прогрева каждый повтор выполняет несколько проходов. Скорость повтора равна числу обработанных блоков за проход × размеру блока × числу проходов / времени. Промежутки между блоками и неполный хвост исключаются. На графике — средняя скорость повторов в мегабайтах/с. Для столбца «Линейн.» выполняется дополнительный замер с шагом, равным размеру блока (блоки идут подряд). Эффективность — среднее по 41 шагу / линейная скорость × 100%.\n\nLatency\nКаждое чтение указателя даёт адрес следующего элемента случайной цепочки. Ось X показывает размер рабочего набора, ось Y — наносекунды на чтение. График показывает медиану.\n\nПроверка результатов\nЩёлкни точку и открой «Исходные замеры» для проверки каждого повтора. Тест выполняет 3, 5 или 9 повторов в зависимости от профиля. Предупреждение появляется при CV выше 5% или изменении между половинами серии более 10%. Питание, нагрузка и выбор ядра могут влиять на результат. Эталон сравнивает прогоны с одинаковыми настройками. Экспорт JSON/CSV содержит исходные байты, длительности, проходы и единицы скорости. Частичный прогон можно экспортировать.\n";
     about.string=[NSString stringWithFormat:@"Память этого Mac · %@ RAM\n%@\n\n%@",SizeLabel(NSProcessInfo.processInfo.physicalMemory),CacheSummary(cacheRecords,YES),guide];
     v.aboutScroll.documentView=about;
     for (NSView *view in @[v.titleLabel,v.machineLabel,v.cacheLabel,v.tabs,v.rangeLabel,v.maximumPopup,v.profileLabel,v.profilePopup,v.chart,v.tableScroll,v.noteLabel,v.statusLabel,v.progress,v.startButton,v.exportButton,v.jsonButton,v.baselineButton,v.auditButton,v.baselineToggle,v.conditionLabel,v.aboutScroll]) [v addSubview:view];
