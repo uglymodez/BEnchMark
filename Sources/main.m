@@ -377,6 +377,15 @@ static NSTextField *Label(NSString *text, CGFloat size, NSFontWeight weight, NSC
     self.progress.frame=NSMakeRect(gap,h-12,w-2*gap,4);
     self.statusLabel.frame=NSMakeRect(gap,h-72,w-2*gap,20);
     self.aboutScroll.frame=NSMakeRect(gap,184+extra,w-2*gap,h-290-extra);
+    // The scroll view starts with a zero frame. Set the document width from the
+    // laid-out clip view, including the space reserved for its vertical scroller.
+    NSTextView *document=(NSTextView *)self.aboutScroll.documentView;
+    CGFloat clipWidth=self.aboutScroll.contentSize.width;
+    if (document && clipWidth>0 && fabs(document.frame.size.width-clipWidth)>.5) {
+        [document setFrameSize:NSMakeSize(clipWidth,document.frame.size.height)];
+        [document.layoutManager ensureLayoutForTextContainer:document.textContainer];
+        [document sizeToFit];
+    }
     self.chart.hidden=self.showingAbout; self.tableScroll.hidden=self.showingAbout;
     self.noteLabel.hidden=self.showingAbout; self.aboutScroll.hidden=!self.showingAbout;
     for (NSTextField *label in self.stats) label.hidden=self.showingAbout;
@@ -461,7 +470,11 @@ static NSTextField *Label(NSString *text, CGFloat size, NSFontWeight weight, NSC
     v.aboutScroll=[[NSScrollView alloc] initWithFrame:NSZeroRect]; v.aboutScroll.hasVerticalScroller=YES;
     NSTextView *about=[[NSTextView alloc] initWithFrame:NSMakeRect(0,0,960,650)]; about.editable=NO; about.selectable=YES;
     about.font=[NSFont systemFontOfSize:14]; about.backgroundColor=self.window.backgroundColor;
-    about.textContainerInset=NSMakeSize(12,12); about.autoresizingMask=NSViewWidthSizable; about.textContainer.widthTracksTextView=YES;
+    about.textContainerInset=NSMakeSize(12,12); about.autoresizingMask=NSViewNotSizable;
+    about.horizontallyResizable=NO; about.verticallyResizable=YES;
+    about.minSize=NSZeroSize; about.maxSize=NSMakeSize(CGFLOAT_MAX,CGFLOAT_MAX);
+    about.textContainer.containerSize=NSMakeSize(936,CGFLOAT_MAX);
+    about.textContainer.widthTracksTextView=YES;
     NSString *guide=@"Как выполняется тест\nПрограмма выделяет буфер в оперативной памяти и заранее заполняет его. Видео, файлы, накопитель, сеть и GPU в нагрузке не участвуют. Один поток CPU повторяет заданную операцию с буфером. Перед серией он выполняет ту же нагрузку 100–300 мс. Прогрев учитывается отдельно.\n\nКэш · 5 размеров\nДля каждого рабочего набора от 4 KiB до выбранного максимума процессор последовательно читает буфер и отдельно записывает его. Это 128-битные операции NEON на Apple Silicon или SSE2 на Intel. Барьер завершает пакет записей. Для каждого повтора скорость равна размеру буфера × числу полных проходов / времени. График соединяет средние по всем размерам. Полоса показывает минимум и максимум. Таблица сравнивает пять выбранных размеров, отдельно для чтения и записи.\n\nКак читать график\nОсь X показывает размер буфера в битах по логарифмической шкале. В обозначениях этой программы KB — килобит (1000 бит), MB — мегабит (1 000 000 бит). Один байт равен 8 битам. Например, 64 KiB = 65 536 байт = 524,288 KB. В настройках KiB и MiB обозначают двоичные единицы байтов. На оси Y скорость в GB/s — миллиардах байтов в секунду.\n\nВертикальные штрихи указывают ёмкости L1D, L2 и L3, о которых сообщает macOS. L1I и L1D — части одного уровня L1. L1I хранит инструкции. L2 может быть общим для группы ядер. Совпадающие ёмкости имеют одну отметку. macOS выбирает ядро во время теста.\n\nСтрелки ↑ и ↓ показывают самый большой рост и спад средней скорости чтения при примерно двукратном увеличении буфера. Отметка ставится в конце интервала, если изменение достигло 10% и диапазоны min–max двух точек не пересекаются. Причину изменения по одной кривой установить нельзя. Цветной пунктир вдоль кривой показывает сохранённый эталон.\n\nRead RAM и Write RAM\nВ буфере фиксированного размера процессор читает или записывает блоки по 32, 64, 128 и 256 байт. По оси X меняется шаг между началами блоков (1–11 KiB, подписан в килобитах). Скорость по оси Y выражена в мегабайтах/с. Учитываются только байты обработанных блоков. Эффективность сравнивает среднюю скорость с отдельным последовательным проходом.\n\nLatency\nКаждое чтение указателя даёт адрес следующего элемента случайной цепочки. Ось X показывает размер рабочего набора, ось Y — наносекунды на чтение. График показывает медиану.\n\nПроверка результатов\nЩёлкни точку и открой «Исходные замеры» для проверки каждого повтора. Тест выполняет 3, 5 или 9 повторов в зависимости от профиля. Предупреждение появляется при CV выше 5% или изменении между половинами серии более 10%. Питание, нагрузка и выбор ядра могут влиять на результат. Эталон сравнивает прогоны с одинаковыми настройками. Экспорт JSON/CSV содержит исходные байты, длительности, проходы и единицы скорости. Частичный прогон можно экспортировать.\n";
     about.string=[NSString stringWithFormat:@"Память этого Mac · %@ RAM\n%@\n\n%@",SizeLabel(NSProcessInfo.processInfo.physicalMemory),CacheSummary(cacheRecords,YES),guide];
     v.aboutScroll.documentView=about;
@@ -803,6 +816,9 @@ static NSTextField *Label(NSString *text, CGFloat size, NSFontWeight weight, NSC
         if (self.selectedMode==0) {
             [self showAbout:nil];
             [self writeSmokeScreenshot:[[path stringByDeletingPathExtension] stringByAppendingString:@"-about.png"]];
+            NSTextView *doc=(NSTextView *)self.content.aboutScroll.documentView;
+            if (doc.frame.size.width>self.content.aboutScroll.contentSize.width+1 ||
+                doc.textContainer.containerSize.width>self.content.aboutScroll.contentSize.width) exit(1);
             self.content.tabs.selectedSegment=0; [self changeTab:nil];
         }
         self.window.appearance=[NSAppearance appearanceNamed:NSAppearanceNameDarkAqua];
