@@ -1,16 +1,16 @@
 {
   "application": "Memory Lab for Mac",
-  "version": "2.5",
+  "version": "2.6",
   "archive": "MemoryLab-Universal.zip",
-  "archive_sha256": "867381ce0a41cefcbae8b02876cd495231131f3b658c589df941c5ecf0f2f914",
+  "archive_sha256": "8a2d34b7e73b884304dcf21ade96d0242a38ac2855a2accc05682267fe8dba71",
   "repository": "uglymodez/BEnchMark",
-  "workflow_run_id": 44144590632,
-  "workflow_run_url": "https://github.com/uglymodez/BEnchMark/actions/runs/44144590632",
-  "artifact_id": 14357500081,
-  "artifact_sha256": "147735c3143d806af0fbbe4ec54d826e3073a862ff121e8924d9a41092e70a99",
-  "source_commit": "5964f65aac4451eff5d8a0a0fba1275b26d108d0",
-  "merge_commit": "d3c5ecf6694fb8d8fad2939603c630ffd37a3a19",
-  "source_tree": "e5307bd06f028edb9bf9da5d3ff5653c03063256",
+  "workflow_run_id": 44634923084,
+  "workflow_run_url": "https://github.com/uglymodez/BEnchMark/actions/runs/44634923084",
+  "artifact_id": 14583666402,
+  "artifact_sha256": "dfaf4c997ef36d542288519d2e5b798774262c809f2003d39c9eeadaa8576b2b",
+  "source_commit": "0987f38d1877c92ec074786a52961f0bab299c65",
+  "merge_commit": "bf5d55b9eb722958c3bf9941be007b963d2ebdab",
+  "source_tree": "2b2547c474fd54cafa66a1ab63eb80d14e6bba80",
   "architectures": [
     "arm64",
     "x86_64"
@@ -19,14 +19,10 @@
   "signing": "ad-hoc",
   "notarized": false,
   "validation": {
-    "linux_core_and_sanitizers": "passed",
-    "macos_intel_core_and_reports": "passed",
     "macos_intel_gui_all_four_modes": "passed",
-    "live_tab_navigation_and_cancel_from_about": "passed",
-    "raw_measurements_window": "passed",
-    "independent_timing_recomputation": "passed: two runs per mode; 450 ranges, 57 latency, 168 read, 168 write points per run; JSON/CSV checked",
-    "native_arm64_latest_run": "skipped",
-    "warmup_and_sample_drift": "passed: raw counters, elapsed warmup, target and drift independently verified in both runs of all four modes"
+    "cache_summary_units_and_about": "passed",
+    "independent_sample_recomputation": "passed",
+    "native_arm64_latest_run": "skipped"
   },
   "packaging": "Unmodified inner archive from GitHub Actions artifact"
 }

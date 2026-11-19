@@ -1,2 +1,2 @@
 3e19b5339264a133a01e2f7a3c1275eea1368bdfebff7a5c458b2c5ce09ae4bb  MemoryBenchmark-Mac.zip
-867381ce0a41cefcbae8b02876cd495231131f3b658c589df941c5ecf0f2f914  MemoryLab-Universal.zip
+8a2d34b7e73b884304dcf21ade96d0242a38ac2855a2accc05682267fe8dba71  MemoryLab-Universal.zip
