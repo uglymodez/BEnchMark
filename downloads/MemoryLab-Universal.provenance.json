@@ -1,16 +1,16 @@
 {
   "application": "Memory Lab for Mac",
-  "version": "2.8",
+  "version": "2.9",
   "archive": "MemoryLab-Universal.zip",
-  "archive_sha256": "36c2394b65523a5fa1be539fd702f74101e501dbc1b20ff333036bdd0400c84b",
+  "archive_sha256": "4013ebb1d323c41c2b0b79897b558bf91593a2a7d5ad504b190c272840f00fcd",
   "repository": "uglymodez/BEnchMark",
-  "workflow_run_id": 44642592819,
-  "workflow_run_url": "https://github.com/uglymodez/BEnchMark/actions/runs/44642592819",
-  "artifact_id": 14587996472,
-  "artifact_sha256": "0c7ff583a9161ca507b28cbfcbb7a05a241ef40859779e5bbbd52a83885bda59",
-  "source_commit": "e2b3726ffdba56770ca6a27e07b8d065a5a32512",
-  "merge_commit": "a98320711a91b0432f102b42c4ca0a9ae27f268a",
-  "source_tree": "a8bed8375cedd2fc5b9f0372616dab63684bd93b",
+  "workflow_run_id": 44713227566,
+  "workflow_run_url": "https://github.com/uglymodez/BEnchMark/actions/runs/44713227566",
+  "artifact_id": 14618029115,
+  "artifact_sha256": "9c8a8152706b294d5177509df564d003de6d7bd831b162bf95d587875f5d4f98",
+  "source_commit": "f50e5c773346fc50575f448bbb119131b00165d2",
+  "merge_commit": "4612b823d30f57c0be6f2de7e6abe5c1f9540329",
+  "source_tree": "a1728b9b99f9ae536bd19e60d260bfc126553fda",
   "architectures": [
     "arm64",
     "x86_64"
@@ -22,7 +22,8 @@
     "macos_intel_gui_all_four_modes": "passed",
     "cache_summary_units_and_about": "passed",
     "independent_sample_recomputation": "passed",
-    "native_arm64_latest_run": "skipped"
+    "native_arm64_latest_run": "skipped",
+    "binary_capacity_and_stride_units": "passed"
   },
   "packaging": "Unmodified inner archive from GitHub Actions artifact"
 }
