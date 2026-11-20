@@ -168,7 +168,7 @@ CSV сохраняет также `offset_bytes`, `linear_reference` и стат
 
 ## Скачать и открыть приложение
 
-[**Скачать Memory Lab 2.7 — готовое приложение для Mac**](https://github.com/uglymodez/BEnchMark/blob/main/downloads/MemoryLab-Universal.zip).
+[**Скачать Memory Lab 2.8 — готовое приложение для Mac**](https://github.com/uglymodez/BEnchMark/blob/main/downloads/MemoryLab-Universal.zip).
 
 1. Открой ссылку и нажми **Download raw file** (значок скачивания). Репозиторий
    приватный: нужно войти в свой GitHub.
@@ -183,8 +183,8 @@ CSV сохраняет также `offset_bytes`, `linear_reference` и стат
 разработки. После успешной сборки готовое приложение также лежит в
 `build/Memory Benchmark.app`; его тоже можно перенести в «Программы».
 
-Архив содержит universal-приложение 2.7 для **Apple Silicon и Intel, macOS 12+**.
-Он получен из [успешного CI run 44637863230](https://github.com/uglymodez/BEnchMark/actions/runs/44637863230):
+Архив содержит universal-приложение 2.8 для **Apple Silicon и Intel, macOS 12+**.
+Он получен из [успешного CI run 44642592819](https://github.com/uglymodez/BEnchMark/actions/runs/44642592819):
 на macOS Intel прошли тесты, проверка подписи, два latency-прогона и два
 подробных прогона по 225 размеров с восстановлением эталона, а также
 повторные Read/Write RAM с четырьмя размерами блоков. Все режимы проверены
@@ -194,7 +194,7 @@ CSV сохраняет также `offset_bytes`, `linear_reference` и стат
 Read/Write RAM на прогон. CSV/JSON сверены, прогрев и изменение внутри серии пересчитаны,
 окно исходных замеров открывается;
 светлая и тёмная темы просмотрены.
-Исходное дерево совпадает с объединённой версией 2.7. Финальный ARM64-код
+Исходное дерево совпадает с объединённой версией 2.8. Финальный ARM64-код
 скомпилирован, но его запуск на M5 этим прогоном не проверен.
 [Контрольные суммы](downloads/SHA256SUMS.txt) ·
 [Происхождение сборки](downloads/MemoryLab-Universal.provenance.json).
@@ -226,7 +226,7 @@ bash build.sh
 В universal-приложении macOS сама выбирает нужную архитектуру.
 
 **Архив `downloads/MemoryBenchmark-Mac.zip` — старая версия 1.0.**
-Готовая версия 2.7 находится в `downloads/MemoryLab-Universal.zip` по ссылке выше.
+Готовая версия 2.8 находится в `downloads/MemoryLab-Universal.zip` по ссылке выше.
 Архивы не пересобираются автоматически при изменении исходников; проверяй
 версию и происхождение сборки. Для разработки остаётся workflow
 `Memory Lab validation`, создающий артефакт `MemoryLab-Universal`.
