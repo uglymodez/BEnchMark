@@ -22,11 +22,6 @@ static NSString *ThermalName(NSProcessInfoThermalState state) {
     }
     return @"температурный статус неизвестен";
 }
-static NSString *SizeLabel(uint64_t n) {
-    if (n>=1024ULL*1024*1024) return [NSString stringWithFormat:@"%.2g GiB",n/(1024.0*1024*1024)];
-    if (n>=1024*1024) return [NSString stringWithFormat:@"%.3g MiB",n/(1024.0*1024)];
-    return [NSString stringWithFormat:@"%.3g KiB",n/1024.0];
-}
 static uint64_t SysNumber(const char *key) {
     uint64_t result=0; size_t size=sizeof(result);
     return sysctlbyname(key,&result,&size,NULL,0)==0 ? result : 0;
@@ -35,13 +30,6 @@ static NSString *SysString(const char *key) {
     char text[256]={0}; size_t size=sizeof(text);
     if (sysctlbyname(key,text,&size,NULL,0)!=0) return @"";
     text[sizeof(text)-1]=0; return [NSString stringWithUTF8String:text] ?: @"";
-}
-// The presentation uses the course notation KB/MB for decimal kilobits/megabits.
-// Byte counts stay untouched in the benchmark, metadata and serialised records.
-static NSString *BitSize(uint64_t bytes) {
-    double bits=8.0*bytes;
-    return bits<1e6 ? [NSString stringWithFormat:@"%.6g KB",bits/1e3]
-                    : [NSString stringWithFormat:@"%.6g MB",bits/1e6];
 }
 // Pick major grid spacing from the decimal series 1, 2, 5, 10, ... .
 static double MajorStep(double requested) {
@@ -59,11 +47,16 @@ static NSString *TickNumber(double value) {
         formatter=[NSNumberFormatter new];
         formatter.locale=[NSLocale localeWithLocaleIdentifier:@"ru_RU"];
         formatter.numberStyle=NSNumberFormatterDecimalStyle;
-        formatter.maximumFractionDigits=3;
+        formatter.maximumFractionDigits=4;
         formatter.minimumFractionDigits=0;
         formatter.groupingSeparator=@" ";
     });
     return [formatter stringFromNumber:@(value)];
+}
+static NSString *SizeLabel(uint64_t bytes) {
+    if (bytes >= (1ULL << 30)) return [TickNumber(bytes / 1073741824.0) stringByAppendingString:@" GiB"];
+    if (bytes >= (1ULL << 20)) return [TickNumber(bytes / 1048576.0) stringByAppendingString:@" MiB"];
+    return [TickNumber(bytes / 1024.0) stringByAppendingString:@" KiB"];
 }
 static NSArray<NSDictionary *> *CacheRecords(void) {
     NSArray *fields=@[@"l1icachesize",@"l1dcachesize",@"l2cachesize",@"l3cachesize"];
@@ -182,8 +175,14 @@ static NSTextField *Label(NSString *text, CGFloat size, NSFontWeight weight, NSC
 - (void)text:(NSString *)s at:(NSPoint)p color:(NSColor *)color size:(CGFloat)size {
     [s drawAtPoint:p withAttributes:@{NSFontAttributeName:[NSFont monospacedSystemFontOfSize:size weight:NSFontWeightRegular],NSForegroundColorAttributeName:color}];
 }
+- (CGFloat)xForBuffer:(uint64_t)bytes plot:(NSRect)plot {
+    return NSMinX(plot)+NSWidth(plot)*log2((double)bytes/4096)/fmax(1,log2((double)self.maximum/4096));
+}
+- (CGFloat)xForStride:(size_t)bytes plot:(NSRect)plot {
+    return NSMinX(plot)+NSWidth(plot)*(bytes-1024)/10240.0;
+}
 - (NSPoint)position:(mb_result)r value:(double)value plot:(NSRect)plot high:(double)high {
-    return NSMakePoint(plot.origin.x+plot.size.width*log2((double)r.bytes/4096)/fmax(1,log2((double)self.maximum/4096)),NSMaxY(plot)-plot.size.height*value/high);
+    return NSMakePoint([self xForBuffer:r.bytes plot:plot],NSMaxY(plot)-plot.size.height*value/high);
 }
 // Returned ceiling is also used to position points, envelopes and the baseline.
 - (double)drawValueAxis:(NSRect)plot ceiling:(double)ceiling grid:(NSColor *)grid {
@@ -223,16 +222,15 @@ static NSTextField *Label(NSString *text, CGFloat size, NSFontWeight weight, NSC
     for (NSArray *series in @[self.points,self.baseline ?: @[]]) for (MBPoint *p in series)
         { mb_result r=p.result; if (r.stride_bytes!=r.block_bytes) high=fmax(high,mb_result_maximum(&r)*1000*1.1); }
     high=[self drawValueAxis:plot ceiling:high grid:grid];
-    const double minKB=1024*8.0/1000, maxKB=11264*8.0/1000;
     CGFloat edge=0;
-    for (int kb=10;kb<=maxKB;kb+=5) {
-        CGFloat x=NSMinX(plot)+NSWidth(plot)*(kb-minKB)/(maxKB-minKB);
-        [self drawXTick:x plot:plot label:kb%10==0?TickNumber(kb):nil grid:grid lastLabelEdge:&edge];
+    for (size_t stride=1024; stride<=11264; stride+=512) {
+        NSString *label=stride%1024==0 ? TickNumber(stride/1024) : nil;
+        [self drawXTick:[self xForStride:stride plot:plot] plot:plot label:label grid:grid lastLabelEdge:&edge];
     }
     CGFloat dash[]={3,4};
     [self text:self.mode==1?@"ЧТЕНИЕ БЛОКА":@"ЗАПИСЬ БЛОКА" at:NSMakePoint(18,16) color:NSColor.whiteColor size:12];
     [self text:@"Y · Скорость, мегабайт/с" at:NSMakePoint(8,57) color:NSColor.lightGrayColor size:10];
-    [self text:@"X · Шаг доступа, KB (килобиты)" at:NSMakePoint(w-295,h-17) color:NSColor.lightGrayColor size:10];
+    [self text:@"X · Шаг доступа, KiB (кибибайты)" at:NSMakePoint(w-295,h-17) color:NSColor.lightGrayColor size:10];
     NSMutableArray *hover=[NSMutableArray array];
     for (NSUInteger b=0;b<4;++b) {
         size_t block=32UL<<b; NSColor *color=colors[b];
@@ -243,7 +241,7 @@ static NSTextField *Label(NSString *text, CGFloat size, NSFontWeight weight, NSC
             for (MBPoint *p in series) {
                 mb_result r=p.result; if (r.block_bytes!=block || r.stride_bytes==block) continue;
                 double mean=mb_result_mean(&r)*1000;
-                NSPoint point=NSMakePoint(plot.origin.x+plot.size.width*(r.stride_bytes-1024)/10240.,NSMaxY(plot)-plot.size.height*mean/high);
+                NSPoint point=NSMakePoint([self xForStride:r.stride_bytes plot:plot],NSMaxY(plot)-plot.size.height*mean/high);
                 if (first) { [path moveToPoint:point]; first=NO; } else [path lineToPoint:point];
                 if (pass) {
                     CGFloat top=NSMaxY(plot)-plot.size.height*r.maximum_gb_per_second*1000/high;
@@ -259,7 +257,7 @@ static NSTextField *Label(NSString *text, CGFloat size, NSFontWeight weight, NSC
             [[color colorWithAlphaComponent:pass?1:.4] setStroke]; path.lineWidth=pass?1.8:1; [path stroke];
         }
     }
-    NSString *detail=self.selectedBytes?[NSString stringWithFormat:@"Шаг %zu байт · %@ мегабайт/с",self.selectedBytes,[hover componentsJoinedByString:@" / "]]:@"Точки — замеры · штрихи — min–max · оранжевый ободок — CV > 5% / изменение > 10%";
+    NSString *detail=self.selectedBytes?[NSString stringWithFormat:@"Шаг %@ · %@ мегабайт/с",SizeLabel(self.selectedBytes),[hover componentsJoinedByString:@" / "]]:@"Точки — замеры · штрихи — min–max · оранжевый ободок — CV > 5% / изменение > 10%";
     [self text:detail at:NSMakePoint(18,40) color:NSColor.lightGrayColor size:10];
     if (!self.points.count) [self text:@"Начни тест для сравнения блоков 32 / 64 / 128 / 256 байт" at:NSMakePoint(90,h/2) color:NSColor.lightGrayColor size:12];
 }
@@ -275,7 +273,7 @@ static NSTextField *Label(NSString *text, CGFloat size, NSFontWeight weight, NSC
     CGFloat dash[]={3,5}; NSColor *color=[NSColor colorWithWhite:.88 alpha:.8];
     CGFloat freeX[2]={0,0};
     for (NSNumber *bytes in [markers.allKeys sortedArrayUsingSelector:@selector(compare:)]) {
-        CGFloat x=NSMinX(plot)+NSWidth(plot)*log2(bytes.doubleValue/4096)/log2((double)self.maximum/4096);
+        CGFloat x=[self xForBuffer:bytes.unsignedLongLongValue plot:plot];
         NSBezierPath *line=[NSBezierPath bezierPath]; [line moveToPoint:NSMakePoint(x,NSMinY(plot))];
         [line lineToPoint:NSMakePoint(x,NSMaxY(plot))]; [line setLineDash:dash count:2 phase:0]; [color setStroke]; [line stroke];
         NSString *title=[NSString stringWithFormat:@"%@ · %@",[[markers[bytes] array] componentsJoinedByString:@"/"],BinaryCapacity(bytes.unsignedLongLongValue)];
@@ -341,22 +339,15 @@ static NSTextField *Label(NSString *text, CGFloat size, NSFontWeight weight, NSC
         for (MBPoint *p in series) { mb_result r=p.result; high=fmax(high,(series==self.points?mb_result_maximum(&r):(self.mode==0?mb_result_mean(&r):mb_result_value(&r)))*1.12); }
     NSColor *grid=[NSColor colorWithRed:0 green:.55 blue:.55 alpha:1], *muted=[NSColor colorWithWhite:.8 alpha:1];
     high=[self drawValueAxis:plot ceiling:high grid:grid];
-    const double minKB=4096*8.0/1000, maxKB=self.maximum*8.0/1000;
     CGFloat edge=0;
-    for (double decade=10;decade<=maxKB;decade*=10) {
-        for (int digit=1;digit<=9;digit++) {
-            double kb=digit*decade;
-            if (kb<minKB || kb>maxKB) continue;
-            CGFloat x=NSMinX(plot)+NSWidth(plot)*log2(kb/minKB)/log2(maxKB/minKB);
-            NSString *label=nil;
-            if (digit==1 || digit==2 || digit==5) {
-                label=[NSString stringWithFormat:@"%@ %@",TickNumber(kb<1000?kb:kb/1000),kb<1000?@"KB":@"MB"];
-            }
-            [self drawXTick:x plot:plot label:label grid:grid lastLabelEdge:&edge];
-        }
+    for (size_t bytes=4096; bytes<=self.maximum; bytes*=2) {
+        [self drawXTick:[self xForBuffer:bytes plot:plot] plot:plot label:BinaryCapacity(bytes) grid:grid lastLabelEdge:&edge];
+        size_t middle=bytes+bytes/2;
+        if (middle<self.maximum)
+            [self drawXTick:[self xForBuffer:middle plot:plot] plot:plot label:nil grid:grid lastLabelEdge:&edge];
     }
     [self text:self.mode==3?@"Y · Задержка, нс/чтение":@"Y · Скорость, GB/s (гигабайт/с)" at:NSMakePoint(12,57) color:muted size:10];
-    [self text:@"X · Размер буфера, KB / MB (килобиты / мегабиты) · log₂" at:NSMakePoint(w-360,h-17) color:muted size:9];
+    [self text:@"X · Размер буфера, KiB / MiB / GiB · log₂" at:NSMakePoint(w-360,h-17) color:muted size:9];
     [self drawCacheGuides:plot];
     NSString *legend=@[@"● ЧТЕНИЕ · СРЕДНЕЕ",@"● ЧТЕНИЕ ПАМЯТИ",@"● ЗАПИСЬ ПАМЯТИ",@"● ЗАДЕРЖКА · МЕНЬШЕ ЛУЧШЕ"][self.mode];
     [self text:legend at:NSMakePoint(20,16) color:OperationColor(self.mode==2?MB_WRITE:self.mode==3?MB_LATENCY:MB_READ) size:12];
@@ -394,7 +385,7 @@ static NSTextField *Label(NSString *text, CGFloat size, NSFontWeight weight, NSC
         if (self.mode==0 && op==MB_READ) readPoints=current;
     }
     if (self.selectedBytes) {
-        NSMutableArray *details=[NSMutableArray arrayWithObject:BitSize(self.selectedBytes)];
+        NSMutableArray *details=[NSMutableArray arrayWithObject:SizeLabel(self.selectedBytes)];
         for (MBPoint *p in self.points) if (p.result.bytes==self.selectedBytes) {
             mb_result r=p.result;
             [details addObject:[NSString stringWithFormat:@"%s %.2f %s · CV %.1f%%",mb_operation_name(r.operation),(self.mode==0?mb_result_mean(&r):mb_result_value(&r)),mb_operation_unit(r.operation),r.cv_percent]];
@@ -498,10 +489,12 @@ static NSTextField *Label(NSString *text, CGFloat size, NSFontWeight weight, NSC
     self.content.autoresizingMask=NSViewWidthSizable|NSViewHeightSizable;
     self.window.contentView=self.content; MBContent *v=self.content;
     NSColor *dark=NSColor.labelColor, *muted=[NSColor secondaryLabelColor];
-    v.titleLabel=Label(@"Memory Lab  /  2.8",27,NSFontWeightSemibold,dark);
+    v.titleLabel=Label(@"Memory Lab  /  2.9",27,NSFontWeightSemibold,dark);
     NSString *cpu=SysString("machdep.cpu.brand_string"); if (!cpu.length) cpu=SysString("hw.model");
     NSString *translation=SysNumber("sysctl.proc_translated")?@" · Rosetta: пересобери под arm64":@" · native";
-    v.machineLabel=Label([NSString stringWithFormat:@"%@  ·  %@ RAM  ·  %@%@  ·  macOS %@",cpu,SizeLabel(NSProcessInfo.processInfo.physicalMemory),[NSString stringWithUTF8String:mb_architecture()],translation,NSProcessInfo.processInfo.operatingSystemVersionString],12,NSFontWeightMedium,dark);
+    // Stored reports use this display string as part of the machine identity.
+    NSString *installedRAM=[NSString stringWithFormat:@"%.2g GiB",NSProcessInfo.processInfo.physicalMemory/(1024.0*1024*1024)];
+    v.machineLabel=Label([NSString stringWithFormat:@"%@  ·  %@ RAM  ·  %@%@  ·  macOS %@",cpu,installedRAM,[NSString stringWithUTF8String:mb_architecture()],translation,NSProcessInfo.processInfo.operatingSystemVersionString],12,NSFontWeightMedium,dark);
     v.machineLabel.toolTip=v.machineLabel.stringValue;
     NSArray *cacheRecords=CacheRecords();
     v.cacheLabel=Label(CacheSummary(cacheRecords,NO),12,NSFontWeightMedium,dark); v.cacheLabel.maximumNumberOfLines=0; v.cacheLabel.lineBreakMode=NSLineBreakByWordWrapping; v.cacheLabel.toolTip=[v.cacheLabel.stringValue stringByAppendingString:@". Сведения macOS; L2 может быть общим для группы ядер. Они не определяют, на каком ядре идёт тест."];
@@ -550,9 +543,9 @@ static NSTextField *Label(NSString *text, CGFloat size, NSFontWeight weight, NSC
     about.minSize=NSZeroSize; about.maxSize=NSMakeSize(CGFLOAT_MAX,CGFLOAT_MAX);
     about.textContainer.containerSize=NSMakeSize(936,CGFLOAT_MAX);
     about.textContainer.widthTracksTextView=YES;
-    NSString *guide=@"Как выполняется тест\nПрограмма выделяет буфер в оперативной памяти и заранее заполняет его. Видео, файлы, накопитель, сеть и GPU в нагрузке не участвуют. Один поток CPU повторяет заданную операцию с буфером. Перед серией он выполняет ту же нагрузку 100–300 мс. Прогрев учитывается отдельно.\n\nКэш · 5 размеров\nДля каждого рабочего набора от 4 KiB до выбранного максимума процессор последовательно читает буфер и отдельно записывает его. Это 128-битные операции NEON на Apple Silicon или SSE2 на Intel. Барьер завершает пакет записей. Для каждого повтора скорость равна размеру буфера × числу полных проходов / времени. График соединяет средние по всем размерам. Полоса показывает минимум и максимум. Таблица сравнивает пять выбранных размеров, отдельно для чтения и записи.\n\nКак читать график\nОсь X показывает размер буфера в битах по логарифмической шкале. В обозначениях этой программы KB — килобит (1000 бит), MB — мегабит (1 000 000 бит). Один байт равен 8 битам. Например, 64 KiB = 65 536 байт = 524,288 KB. В настройках KiB и MiB обозначают двоичные единицы байтов. На оси Y скорость в GB/s — миллиардах байтов в секунду.\n\nВертикальные штрихи указывают ёмкости L1D, L2 и L3, о которых сообщает macOS. L1I и L1D — части одного уровня L1. L1I хранит инструкции. L2 может быть общим для группы ядер. Совпадающие ёмкости имеют одну отметку. macOS выбирает ядро во время теста.\n\nСтрелки ↑ и ↓ показывают самый большой рост и спад средней скорости чтения при примерно двукратном увеличении буфера. Отметка ставится в конце интервала, если изменение достигло 10% и диапазоны min–max двух точек не пересекаются. Причину изменения по одной кривой установить нельзя. Цветной пунктир вдоль кривой показывает сохранённый эталон.\n\nRead RAM и Write RAM · блочный доступ с постоянным шагом (strided access)\nПараметр «До» задаёт размер буфера. Цвет линии задаёт размер блока: 32, 64, 128 или 256 байт. Для каждой точки шаг S фиксирован. Поток обрабатывает полные блоки, начиная со смещений 0, S, 2S и далее до конца буфера. Для следующей точки шаг меняется: от 1024 до 11 264 байт с приращением 256 байт (41 шаг). Координаты точек и подписи оси X выражают одно и то же расстояние в килобитах.\n\nНапример, для блока 64 байта и шага 1024 байта используются диапазоны 0–63, 1024–1087, 2048–2111 и так далее. Внутри блока процессор обращается к 16 байтам за операцию. При чтении он объединяет значения операцией XOR; при записи помещает фиксированный шаблон и выполняет барьер в конце пакета проходов. В буфере 64 MiB такой проход обрабатывает 65 536 блоков, то есть 4 MiB полезных данных.\n\nПосле прогрева каждый повтор выполняет несколько проходов. Скорость повтора равна числу обработанных блоков за проход × размеру блока × числу проходов / времени. Промежутки между блоками и неполный хвост исключаются. На графике — средняя скорость повторов в мегабайтах/с. Для столбца «Линейн.» выполняется дополнительный замер с шагом, равным размеру блока (блоки идут подряд). Эффективность — среднее по 41 шагу / линейная скорость × 100%.\n\nLatency\nКаждое чтение указателя даёт адрес следующего элемента случайной цепочки. Ось X показывает размер рабочего набора, ось Y — наносекунды на чтение. График показывает медиану.\n\nПроверка результатов\nЩёлкни точку и открой «Исходные замеры» для проверки каждого повтора. Тест выполняет 3, 5 или 9 повторов в зависимости от профиля. Предупреждение появляется при CV выше 5% или изменении между половинами серии более 10%. Питание, нагрузка и выбор ядра могут влиять на результат. Эталон сравнивает прогоны с одинаковыми настройками. Экспорт JSON/CSV содержит исходные байты, длительности, проходы и единицы скорости. Частичный прогон можно экспортировать.\n";
-    NSString *cacheHelp=@"Как читать сведения macOS\nПрограмма запрашивает у macOS ёмкости кэшей через sysctl. При наличии групп ядер (например, Super и Efficiency) для каждой показаны свои значения. Строка «Система» содержит доступные общесистемные сведения. Число уровней — количество разных номеров L1, L2 и L3, для которых система вернула ёмкость. Если macOS не публикует ёмкость, программа не может определить её этим способом.\n\nL1 расположен ближе всего к ядру. L1I обслуживает инструкции, L1D — данные. Вместе они образуют уровень L1. L2 участвует в обслуживании запросов после промаха в L1 и может быть общим для группы ядер. Если macOS сообщает L3, он показан как следующий уровень. Значение в строке относится к соответствующему кэшу. Чтобы вычислить суммарную ёмкость чипа, потребовались бы дополнительные сведения о числе экземпляров и совместном использовании.\n\nKiB — кибибайт (1024 байта), MiB — мебибайт (1024 KiB). Например, 128 KiB равны 131 072 байтам или 1,048576 мегабита. Ёмкости и пять опорных размеров в таблице подписаны в двоичных единицах байтов. На оси X используются обозначения курса KB и MB для десятичных килобит и мегабит. Линии одного уровня могут стоять в разных местах, если группы ядер имеют разные ёмкости.\n\nНебольшой буфер процессор многократно обрабатывает в ближайших кэшах. С ростом рабочего набора обращения могут чаще обслуживаться дальними уровнями. Последовательный доступ и предвыборка способны сделать переход плавным. Полоса показывает разброс повторов. У теста нет аппаратных счётчиков попаданий и данных о выбранном ядре каждого повтора.";
-    about.string=[NSString stringWithFormat:@"Память этого Mac · %@ RAM\n%@\n\n%@\n\n%@",SizeLabel(NSProcessInfo.processInfo.physicalMemory),CacheSummary(cacheRecords,YES),cacheHelp,guide];
+    NSString *guide=@"Как выполняется тест\nПрограмма выделяет буфер в оперативной памяти и заранее заполняет его. Видео, файлы, накопитель, сеть и GPU в нагрузке не участвуют. Один поток CPU повторяет заданную операцию с буфером. Перед серией он выполняет ту же нагрузку 100–300 мс. Прогрев учитывается отдельно.\n\nКэш · 5 размеров\nДля каждого рабочего набора от 4 KiB до выбранного максимума процессор последовательно читает буфер и отдельно записывает его. Это 128-битные операции NEON на Apple Silicon или SSE2 на Intel. Барьер завершает пакет записей. Для каждого повтора скорость равна размеру буфера × числу полных проходов / времени. График соединяет средние по всем размерам. Полоса показывает минимум и максимум. Таблица сравнивает пять выбранных размеров, отдельно для чтения и записи.\n\nКак читать график\nОсь X показывает размер буфера по логарифмической шкале. Каждое удвоение размера занимает одинаковое расстояние. Если macOS сообщает L1D объёмом 128 KiB, его штрих стоит точно у 128 KiB на оси. Ось Y показывает среднюю скорость чтения и записи в гигабайтах в секунду (GB/s). 1 GB/s = 1 000 000 000 байт/с = 8 Гбит/с.\n\nВертикальные штрихи указывают ёмкости L1D, L2 и L3, о которых сообщает macOS. L1I и L1D — части одного уровня L1. L1I хранит инструкции. L2 может быть общим для группы ядер. Совпадающие ёмкости имеют одну отметку. macOS выбирает ядро во время теста.\n\nСтрелки ↑ и ↓ показывают самый большой рост и спад средней скорости чтения при примерно двукратном увеличении буфера. Отметка ставится в конце интервала, если изменение достигло 10% и диапазоны min–max двух точек не пересекаются. Причину изменения по одной кривой установить нельзя. Цветной пунктир вдоль кривой показывает сохранённый эталон.\n\nRead RAM и Write RAM · блочный доступ с постоянным шагом (strided access)\nПараметр «До» задаёт размер буфера. Цвет линии задаёт размер блока: 32, 64, 128 или 256 байт. Для каждой точки шаг S фиксирован. Поток обрабатывает полные блоки, начиная со смещений 0, S, 2S и далее до конца буфера. Для следующей точки шаг меняется: от 1024 до 11 264 байт с приращением 256 байт (41 шаг). На оси X шаг указан в KiB: от 1 до 11 KiB через 0,25 KiB.\n\nНапример, для блока 64 байта и шага 1024 байта используются диапазоны 0–63, 1024–1087, 2048–2111 и так далее. Внутри блока процессор обращается к 16 байтам за операцию. При чтении он объединяет значения операцией XOR; при записи помещает фиксированный шаблон и выполняет барьер в конце пакета проходов. В буфере 64 MiB такой проход обрабатывает 65 536 блоков, то есть 4 MiB полезных данных.\n\nПосле прогрева каждый повтор выполняет несколько проходов. Скорость повтора равна числу обработанных блоков за проход × размеру блока × числу проходов / времени. Промежутки между блоками и неполный хвост исключаются. На графике — средняя скорость повторов в мегабайтах/с. Для столбца «Линейн.» выполняется дополнительный замер с шагом, равным размеру блока (блоки идут подряд). Эффективность — среднее по 41 шагу / линейная скорость × 100%.\n\nLatency\nКаждое чтение указателя даёт адрес следующего элемента случайной цепочки. Ось X показывает размер рабочего набора, ось Y — наносекунды на чтение. График показывает медиану.\n\nПроверка результатов\nЩёлкни точку и открой «Исходные замеры» для проверки каждого повтора. Тест выполняет 3, 5 или 9 повторов в зависимости от профиля. Предупреждение появляется при CV выше 5% или изменении между половинами серии более 10%. Питание, нагрузка и выбор ядра могут влиять на результат. Эталон сравнивает прогоны с одинаковыми настройками. Экспорт JSON/CSV содержит исходные байты, длительности, проходы и единицы скорости. Частичный прогон можно экспортировать.\n";
+    NSString *cacheHelp=@"Как читать сведения macOS\nПрограмма запрашивает у macOS ёмкости кэшей через sysctl. При наличии групп ядер (например, Super и Efficiency) для каждой показаны свои значения. Строка «Система» содержит доступные общесистемные сведения. Число уровней — количество разных номеров L1, L2 и L3, для которых система вернула ёмкость. Если macOS не публикует ёмкость, программа не может определить её этим способом.\n\nL1 расположен ближе всего к ядру. L1I обслуживает инструкции, L1D — данные. Вместе они образуют уровень L1. L2 участвует в обслуживании запросов после промаха в L1 и может быть общим для группы ядер. Если macOS сообщает L3, он показан как следующий уровень. Значение в строке относится к соответствующему кэшу. Чтобы вычислить суммарную ёмкость чипа, потребовались бы дополнительные сведения о числе экземпляров и совместном использовании.\n\nРазмеры буфера и ёмкости кэша выражены в двоичных единицах. 1 KiB (кибибайт) = 1024 байта, 1 MiB (мебибайт) = 1024 KiB, 1 GiB (гибибайт) = 1024 MiB. Эти обозначения используются на оси X, у вертикальных штрихов и в таблице. Линии одного уровня могут стоять в разных местах, если группы ядер имеют разные ёмкости.\n\nНебольшой буфер процессор многократно обрабатывает в ближайших кэшах. С ростом рабочего набора обращения могут чаще обслуживаться дальними уровнями. Последовательный доступ и предвыборка способны сделать переход плавным. Полоса показывает разброс повторов. У теста нет аппаратных счётчиков попаданий и данных о выбранном ядре каждого повтора.";
+    about.string=[NSString stringWithFormat:@"Память этого Mac · %@ RAM\n%@\n\n%@\n\n%@",installedRAM,CacheSummary(cacheRecords,YES),cacheHelp,guide];
     v.aboutScroll.documentView=about;
     for (NSView *view in @[v.titleLabel,v.machineLabel,v.cacheLabel,v.tabs,v.rangeLabel,v.maximumPopup,v.profileLabel,v.profilePopup,v.chart,v.tableScroll,v.noteLabel,v.statusLabel,v.progress,v.startButton,v.exportButton,v.jsonButton,v.baselineButton,v.auditButton,v.baselineToggle,v.conditionLabel,v.aboutScroll]) [v addSubview:view];
     self.baselines=[NSMutableDictionary dictionary]; [self loadBaselines];
@@ -565,7 +558,8 @@ static NSTextField *Label(NSString *text, CGFloat size, NSFontWeight weight, NSC
                            @{@"group":@"E",@"level":@"L2",@"kind":@"L2",@"bytes":@6291456}];
         NSString *summary=CacheSummary(fixture,YES);
         if (![summary containsString:@"2 (L1, L2)"] || ![summary containsString:@"6 MiB (6291456 байт)"] || ![summary containsString:@"128 KiB"] ||
-            ![BitSize(65536) isEqual:@"524.288 KB"] || ![BitSize(125000) isEqual:@"1 MB"] ||
+            ![SizeLabel(65536) isEqual:BinaryCapacity(65536)] || ![SizeLabel(6291456) isEqual:BinaryCapacity(6291456)] ||
+            ![SizeLabel(1ULL<<30) isEqual:@"1 GiB"] || ![SizeLabel(1280) isEqual:@"1,25 KiB"] ||
             ![CacheSummary(@[],NO) containsString:@"не предоставила"]) exit(1);
         NSString *smokeMode=NSProcessInfo.processInfo.environment[@"MB_SMOKE_MODE"];
         self.content.tabs.selectedSegment=[smokeMode isEqual:@"ranges"]?0:[smokeMode isEqual:@"read"]?1:[smokeMode isEqual:@"write"]?2:3; [self changeTab:nil];
@@ -582,7 +576,7 @@ static NSTextField *Label(NSString *text, CGFloat size, NSFontWeight weight, NSC
         NSTableColumn *column=[[NSTableColumn alloc] initWithIdentifier:[NSString stringWithFormat:@"%lu",(unsigned long)i]];
         column.headerCell=[[MBHeaderCell alloc] initTextCell:titles[i]]; column.title=titles[i];
         column.width=self.selectedMode==0?108:(i==1?190:150); column.minWidth=70;
-        column.headerToolTip=self.selectedMode==0?(i==4 || i==8?@"Среднее / самое быстрое среднее той же операции среди 5 строк × 100%. Только после полного прогона.":@"Скорость в GB/s. Среднее арифметическое, минимум и максимум повторов."):@"Статистика измерений";
+        column.headerToolTip=i==0?((self.selectedMode==1 || self.selectedMode==2)?@"Размер блока в байтах":@"Размер буфера в KiB, MiB или GiB"):self.selectedMode==0?(i==4 || i==8?@"Среднее / самое быстрое среднее той же операции среди 5 строк × 100%. Только после полного прогона.":@"Скорость в GB/s. Среднее арифметическое, минимум и максимум повторов."):@"Статистика измерений";
         [self.table addTableColumn:column];
     }
     self.table.dataSource=self;
@@ -953,7 +947,7 @@ static NSTextField *Label(NSString *text, CGFloat size, NSFontWeight weight, NSC
     if (row<0 || row>=(NSInteger)self.points.count) return nil;
     mb_result r=self.points[row].result; NSString *text=@"";
     switch (column.identifier.integerValue) {
-        case 0: text=BitSize(r.bytes); break;
+        case 0: text=SizeLabel(r.bytes); break;
         case 1: text=@[@"Чтение",@"Запись",@"Выполнение кода*",@"Задержка"][r.operation]; break;
         case 2: text=[NSString stringWithFormat:@"%.3f %s",mb_result_value(&r),mb_operation_unit(r.operation)]; break;
         case 3: text=[NSString stringWithFormat:@"%.3f — %.3f",mb_result_minimum(&r),mb_result_maximum(&r)]; break;
