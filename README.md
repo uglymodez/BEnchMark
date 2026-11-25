@@ -168,10 +168,11 @@ CSV сохраняет также `offset_bytes`, `linear_reference` и стат
 
 ## Скачать и открыть приложение
 
+[Пошаговая инструкция со снимками экрана (PDF)](downloads/MemoryLab-Install-ru.pdf).
+
 [**Скачать Memory Lab 2.9 — готовое приложение для Mac**](https://github.com/uglymodez/BEnchMark/blob/main/downloads/MemoryLab-Universal.zip).
 
-1. Открой ссылку и нажми **Download raw file** (значок скачивания). Репозиторий
-   приватный: нужно войти в свой GitHub.
+1. Открой ссылку и нажми **Download raw file** (значок скачивания).
 2. Дважды нажми на скачанный ZIP в Finder, чтобы распаковать.
 3. Закрой предыдущую версию. Перетащи **Memory Benchmark.app** в папку
    **«Программы»**, подтвердив замену старого приложения.
